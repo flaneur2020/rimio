@@ -1,0 +1,24 @@
+node:
+  node_id: "edge-node-001"
+  group_id: "edge-cluster-001"
+  bind_addr: "0.0.0.0:8080"
+  disks:
+    - path: /data/disk1
+    - path: /data/disk2
+
+etcd:
+  endpoints:
+    - "http://localhost:2379"
+
+replication:
+  min_write_replicas: 3
+  total_slots: 2048
+
+archive:
+  archive_type: s3
+  s3:
+    bucket: "amberblob-archive"
+    region: "us-east-1"
+    credentials:
+      access_key_id: "YOUR_ACCESS_KEY_ID"
+      secret_access_key: "YOUR_SECRET_ACCESS_KEY"
