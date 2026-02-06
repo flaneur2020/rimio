@@ -6,9 +6,15 @@ node:
     - path: /data/disk1
     - path: /data/disk2
 
-etcd:
-  endpoints:
-    - "http://localhost:2379"
+# Choose registry backend: etcd or redis
+registry:
+  backend: etcd  # or: redis
+  etcd:
+    endpoints:
+      - "http://localhost:2379"
+  # redis:
+  #   url: "redis://localhost:6379"
+  #   pool_size: 10
 
 replication:
   min_write_replicas: 3
