@@ -1,4 +1,5 @@
-use amberblob_core::Config;
+mod config;
+use config::Config;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;

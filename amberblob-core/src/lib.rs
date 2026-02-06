@@ -6,7 +6,6 @@
 //! - SHA256 content-addressed chunks
 //! - SQLite for local metadata
 
-pub mod config;
 pub mod error;
 pub mod node;
 pub mod registry;
@@ -14,7 +13,6 @@ pub mod slot_manager;
 pub mod storage;
 pub mod two_phase_commit;
 
-pub use config::{Config, NodeConfig, EtcdConfig, RedisConfig, RegistryConfig, RegistryBackend, DiskConfig, ReplicationConfig, ArchiveConfig, S3Config};
 pub use error::{AmberError, Result};
 pub use node::{Node, NodeInfo, NodeStatus};
 pub use registry::{Registry, DynRegistry, SlotEvent};

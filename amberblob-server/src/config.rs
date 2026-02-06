@@ -1,3 +1,4 @@
+use amberblob_core::{AmberError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -88,16 +89,16 @@ impl Default for ReplicationConfig {
 }
 
 impl Config {
-    pub fn from_file(path: &str) -> crate::error::Result<Self> {
+    pub fn from_file(path: &str) -> Result<Self> {
         let settings = ::config::Config::builder()
             .add_source(::config::File::with_name(path))
             .add_source(::config::Environment::with_prefix("AMBERBLOB"))
             .build()
-            .map_err(|e| crate::error::AmberError::Config(e.to_string()))?;
+            .map_err(|e| AmberError::Config(e.to_string()))?;
 
         let config: Config = settings
             .try_deserialize()
-            .map_err(|e| crate::error::AmberError::Config(e.to_string()))?;
+            .map_err(|e| AmberError::Config(e.to_string()))?;
 
         Ok(config)
     }

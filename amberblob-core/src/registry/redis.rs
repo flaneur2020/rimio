@@ -1,4 +1,3 @@
-use crate::config::RedisConfig;
 use crate::error::{AmberError, Result};
 use crate::node::NodeInfo;
 use crate::registry::Registry;
@@ -15,8 +14,8 @@ pub struct RedisRegistry {
 
 impl RedisRegistry {
     /// Create a new Redis registry client
-    pub async fn new(config: &RedisConfig, group_id: &str) -> Result<Self> {
-        let client = Client::open(config.url.clone())
+    pub async fn new(url: &str, group_id: &str) -> Result<Self> {
+        let client = Client::open(url)
             .map_err(|e| AmberError::Config(format!("Failed to connect to Redis: {}", e)))?;
 
         // Test connection

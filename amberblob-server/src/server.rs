@@ -1,10 +1,11 @@
+use crate::config::{Config, RegistryBackend};
 use amberblob_core::{
-    Config, AmberError, Result,
+    AmberError, Result,
     Node, NodeInfo,
     SlotManager, SlotInfo, SlotHealth, ReplicaStatus, slot_for_key, TOTAL_SLOTS, CHUNK_SIZE,
     ChunkStore, compute_hash,
     MetadataStore, ObjectMeta, ChunkInfo,
-    EtcdRegistry, RedisRegistry, Registry, RegistryBackend,
+    EtcdRegistry, RedisRegistry, Registry,
     TwoPhaseCommit, TwoPhaseParticipant, Vote,
 };
 use axum::{
@@ -79,9 +80,15 @@ fn default_limit() -> usize {
 
 pub async fn run_server(config: Config) -> Result<()> {
     let node_config = config.node.clone();
+
+    // Collect disk paths for Node
+    let disk_paths: Vec<std::path::PathBuf> = node_config.disks.iter().map(|d| d.path.clone()).collect();
+
     let node = Arc::new(Node::new(
-        node_config.clone(),
-        config.node.bind_addr.clone(),
+        node_config.node_id.clone(),
+        node_config.group_id.clone(),
+        node_config.bind_addr.clone(),
+        disk_paths,
     )?);
 
     // Initialize slot manager with first disk
@@ -104,12 +111,12 @@ pub async fn run_server(config: Config) -> Result<()> {
         RegistryBackend::Etcd => {
             let etcd_config = config.registry.etcd.as_ref()
                 .ok_or_else(|| AmberError::Config("etcd configuration is required for etcd backend".to_string()))?;
-            Arc::new(EtcdRegistry::new(etcd_config, &node_config.group_id).await?)
+            Arc::new(EtcdRegistry::new(&etcd_config.endpoints, &node_config.group_id).await?)
         }
         RegistryBackend::Redis => {
             let redis_config = config.registry.redis.as_ref()
                 .ok_or_else(|| AmberError::Config("redis configuration is required for redis backend".to_string()))?;
-            Arc::new(RedisRegistry::new(redis_config, &node_config.group_id).await?)
+            Arc::new(RedisRegistry::new(&redis_config.url, &node_config.group_id).await?)
         }
     };
 

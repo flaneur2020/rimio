@@ -1,4 +1,3 @@
-use crate::config::EtcdConfig;
 use crate::error::Result;
 use crate::node::NodeInfo;
 use crate::registry::{Registry, SlotEvent};
@@ -15,8 +14,8 @@ pub struct EtcdRegistry {
 
 impl EtcdRegistry {
     /// Create a new etcd registry client
-    pub async fn new(config: &EtcdConfig, group_id: &str) -> Result<Self> {
-        let client = Client::connect(&config.endpoints, None).await?;
+    pub async fn new(endpoints: &[String], group_id: &str) -> Result<Self> {
+        let client = Client::connect(endpoints, None).await?;
         let prefix = format!("/amberblob/{}", group_id);
 
         Ok(Self { client, prefix })

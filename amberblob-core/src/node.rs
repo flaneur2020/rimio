@@ -1,6 +1,6 @@
-use crate::config::NodeConfig;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -21,36 +21,45 @@ pub enum NodeStatus {
 }
 
 pub struct Node {
-    config: NodeConfig,
+    node_id: String,
+    group_id: String,
+    disks: Vec<PathBuf>,
     info: Arc<RwLock<NodeInfo>>,
 }
 
 impl Node {
-    pub fn new(config: NodeConfig, bind_addr: String) -> Result<Self> {
+    pub fn new(
+        node_id: String,
+        group_id: String,
+        bind_addr: String,
+        disks: Vec<PathBuf>,
+    ) -> Result<Self> {
         let info = NodeInfo {
-            node_id: config.node_id.clone(),
-            group_id: config.group_id.clone(),
+            node_id: node_id.clone(),
+            group_id: group_id.clone(),
             address: bind_addr,
             status: NodeStatus::Healthy,
             slots: Vec::new(),
         };
 
         Ok(Self {
-            config,
+            node_id,
+            group_id,
+            disks,
             info: Arc::new(RwLock::new(info)),
         })
     }
 
     pub fn node_id(&self) -> &str {
-        &self.config.node_id
+        &self.node_id
     }
 
     pub fn group_id(&self) -> &str {
-        &self.config.group_id
+        &self.group_id
     }
 
-    pub fn disks(&self) -> &[crate::config::DiskConfig] {
-        &self.config.disks
+    pub fn disks(&self) -> &[PathBuf] {
+        &self.disks
     }
 
     pub async fn info(&self) -> NodeInfo {
