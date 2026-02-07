@@ -134,15 +134,31 @@ CREATE INDEX idx_blob_chunk_archives_chunk ON blob_chunk_archives(chunk_id);
 ## 配置示例
 
 ```yaml
-node:
-  node_id: "edge-node-001"
-  group_id: "edge-cluster-001"
-  disks:
-    - path: /data/disk1
-    - path: /data/disk2
+current_node: edge-node-001
 
-etcd:
-  endpoints: ["etcd1:2379", "etcd2:2379", "etcd3:2379"]
+initial_cluster:
+  name: edge001
+  nodes:
+    - name: "edge-node-001"
+      disks:
+        - path: /data/disk1
+        - path: /data/disk2
+    - name: "edge-node-002"
+      disks:
+        - path: /data/disk1
+        - path: /data/disk2
+    - name: "edge-node-003"
+      disks:
+        - path: /data/disk1
+        - path: /data/disk2
+    - name: "edge-node-004"
+      disks:
+        - path: /data/disk1
+        - path: /data/disk2
+
+registry:
+  etcd:
+    endpoints: ["etcd1:2379", "etcd2:2379", "etcd3:2379"]
 
 archive:
   type: s3
@@ -153,6 +169,19 @@ archive:
       access_key_id: "YOUR_ACCESS_KEY_ID"
       secret_access_key: "YOUR_SECRET_ACCESS_KEY"
 ```
+
+### 配置说明
+
+| 字段 | 说明 |
+|------|------|
+| `current_node` | 当前节点的名称，对应 `initial_cluster.nodes` 中的某个节点 |
+| `initial_cluster` | 初始集群配置，包含集群名称和所有节点信息 |
+| `initial_cluster.name` | 集群名称，作为 slot 路由的根 key |
+| `initial_cluster.nodes` | 集群中的所有节点列表 |
+| `initial_cluster.nodes[].name` | 节点名称 |
+| `initial_cluster.nodes[].disks` | 节点的磁盘列表 |
+| `registry` | 注册中心配置，目前仅支持 etcd |
+| `archive` | 归档存储配置，支持 S3 兼容的对象存储 |
 
 ## 参考
 
