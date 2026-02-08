@@ -2,11 +2,8 @@
 //!
 //! Provides filesystem part storage and metadata management.
 
-pub mod chunk_store;
 pub mod metadata_store;
+pub mod part_store;
 
-pub use chunk_store::{ChunkStore, PutPartResult, compute_hash, verify_hash};
-pub use metadata_store::{BlobHead, BlobMeta, ChunkRef, HeadKind, MetadataStore, TombstoneMeta};
-
-pub use metadata_store::ChunkInfo as _ChunkInfoAlias;
-pub use metadata_store::ObjectMeta as _ObjectMetaAlias;
+pub use metadata_store::{BlobHead, BlobMeta, HeadKind, MetadataStore, PartRef, TombstoneMeta};
+pub use part_store::{PartStore, PutPartResult, compute_hash, verify_hash};

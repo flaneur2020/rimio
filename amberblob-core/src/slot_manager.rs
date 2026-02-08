@@ -7,14 +7,14 @@ use tokio::sync::RwLock;
 use ulid::Ulid;
 
 pub const TOTAL_SLOTS: u16 = 2048;
-pub const CHUNK_SIZE: usize = 64 * 1024 * 1024; // 64MB
+pub const PART_SIZE: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlotInfo {
     pub slot_id: u16,
-    pub replicas: Vec<String>, // node_ids
-    pub primary: String,       // primary node_id
-    pub latest_seq: String,    // ULID string
+    pub replicas: Vec<String>,
+    pub primary: String,
+    pub latest_seq: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,8 +57,7 @@ impl SlotManager {
     }
 
     pub async fn init_slot(&self, slot_id: u16) -> Result<()> {
-        // Use RFC-compliant directory structure: slots/<slot_id>/
-        let slot_path = self.data_dir.join("slots").join(format!("{}", slot_id));
+        let slot_path = self.data_dir.join("slots").join(slot_id.to_string());
         std::fs::create_dir_all(&slot_path)?;
         std::fs::create_dir_all(slot_path.join("blobs"))?;
 
@@ -79,14 +78,14 @@ impl SlotManager {
         let slots = self.slots.read().await;
         slots
             .get(&slot_id)
-            .map(|s| {
+            .map(|slot| {
                 Arc::new(Slot {
-                    slot_id: s.slot_id,
-                    seq: Arc::clone(&s.seq),
-                    data_path: s.data_path.clone(),
+                    slot_id: slot.slot_id,
+                    seq: Arc::clone(&slot.seq),
+                    data_path: slot.data_path.clone(),
                 })
             })
-            .ok_or_else(|| AmberError::SlotNotFound(slot_id))
+            .ok_or(AmberError::SlotNotFound(slot_id))
     }
 
     pub async fn has_slot(&self, slot_id: u16) -> bool {
@@ -98,7 +97,7 @@ impl SlotManager {
         let slots = self.slots.read().await;
         let slot = slots
             .get(&slot_id)
-            .ok_or_else(|| AmberError::SlotNotFound(slot_id))?;
+            .ok_or(AmberError::SlotNotFound(slot_id))?;
 
         let new_seq = Ulid::new();
         let mut seq = slot.seq.write().await;
@@ -110,7 +109,7 @@ impl SlotManager {
         let slots = self.slots.read().await;
         let slot = slots
             .get(&slot_id)
-            .ok_or_else(|| AmberError::SlotNotFound(slot_id))?;
+            .ok_or(AmberError::SlotNotFound(slot_id))?;
 
         let seq = slot.seq.read().await;
         Ok(*seq)
@@ -123,13 +122,7 @@ impl SlotManager {
 }
 
 impl Slot {
-    pub fn chunk_path(&self, blob_id: &str, chunk_id: &str) -> PathBuf {
-        // RFC structure: blobs/{blob_id}/chunks/{chunk_id}
-        self.data_path.join("blobs").join(blob_id).join("chunks").join(chunk_id)
-    }
-
     pub fn meta_db_path(&self) -> PathBuf {
-        // RFC structure: meta.sqlite3 (in slot directory)
         self.data_path.join("meta.sqlite3")
     }
 
@@ -138,7 +131,6 @@ impl Slot {
     }
 }
 
-/// Calculate which slot an object belongs to based on its path
 pub fn slot_for_key(key: &str, total_slots: u16) -> u16 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

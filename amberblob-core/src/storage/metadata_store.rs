@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkRef {
+pub struct PartRef {
     pub name: String,
     pub sha256: String,
     pub offset: u64,
@@ -27,7 +27,7 @@ pub struct BlobMeta {
     pub version: i64,
     pub size_bytes: u64,
     pub etag: String,
-    pub parts: Vec<ChunkRef>,
+    pub parts: Vec<PartRef>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -154,7 +154,7 @@ impl MetadataStore {
         Ok(max_generation.unwrap_or(0) + 1)
     }
 
-    pub fn upsert_part_entry(&self, blob_path: &str, part: &ChunkRef) -> Result<()> {
+    pub fn upsert_part_entry(&self, blob_path: &str, part: &PartRef) -> Result<()> {
         let conn = self.get_conn()?;
         let now = Utc::now().to_rfc3339();
 
@@ -510,6 +510,3 @@ fn parse_rfc3339(value: &str) -> Result<DateTime<Utc>> {
         .map_err(|error| AmberError::Internal(format!("invalid RFC3339 timestamp: {}", error)))?;
     Ok(parsed.with_timezone(&Utc))
 }
-
-pub type ObjectMeta = BlobMeta;
-pub type ChunkInfo = ChunkRef;

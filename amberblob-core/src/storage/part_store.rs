@@ -11,13 +11,13 @@ pub struct PutPartResult {
     pub reused: bool,
 }
 
-/// ChunkStore stores external blob data as `part.{sha256}` files:
+/// PartStore stores external blob data as `part.{sha256}` files:
 /// `slots/{slot_id}/blobs/{blob_path}/part.{sha256}`.
-pub struct ChunkStore {
+pub struct PartStore {
     base_path: PathBuf,
 }
 
-impl ChunkStore {
+impl PartStore {
     pub fn new(base_path: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&base_path)?;
         Ok(Self { base_path })
@@ -65,7 +65,7 @@ impl ChunkStore {
     pub async fn get_part(&self, slot_id: u16, blob_path: &str, sha256: &str) -> Result<Bytes> {
         let part_path = self.part_path(slot_id, blob_path, sha256)?;
         if !part_path.exists() {
-            return Err(AmberError::ChunkNotFound(sha256.to_string()));
+            return Err(AmberError::PartNotFound(sha256.to_string()));
         }
 
         let bytes = fs::read(part_path).await?;
@@ -126,14 +126,12 @@ fn normalize_blob_path(input: &str) -> Result<String> {
     Ok(parts.join("/"))
 }
 
-/// Compute SHA256 hash of data.
 pub fn compute_hash(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
 }
 
-/// Verify data hash.
 pub fn verify_hash(data: &[u8], expected_hash: &str) -> Result<()> {
     let actual = compute_hash(data);
     if actual != expected_hash {
@@ -152,7 +150,7 @@ mod tests {
     #[tokio::test]
     async fn test_part_store_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let store = ChunkStore::new(dir.path().to_path_buf()).unwrap();
+        let store = PartStore::new(dir.path().to_path_buf()).unwrap();
 
         let slot_id = 7;
         let blob_path = "a/b/c.txt";

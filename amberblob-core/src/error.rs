@@ -19,20 +19,14 @@ pub enum AmberError {
     #[error("Slot not found: {0}")]
     SlotNotFound(u16),
 
-    #[error("Chunk not found: {0}")]
-    ChunkNotFound(String),
-
-    #[error("Object not found: {0}")]
-    ObjectNotFound(String),
+    #[error("Part not found: {0}")]
+    PartNotFound(String),
 
     #[error("Blob not found: {0}")]
     BlobNotFound(String),
 
     #[error("Insufficient replicas: need {required}, found {found}")]
     InsufficientReplicas { required: usize, found: usize },
-
-    #[error("2PC failed: {0}")]
-    TwoPhaseCommit(String),
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
