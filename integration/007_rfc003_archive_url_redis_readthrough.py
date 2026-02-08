@@ -186,7 +186,7 @@ def main() -> None:
         part_count = math.ceil(len(body) / part_size)
         etag = sha256_hex(body)
 
-        archive_key = f"amberblob:archive:{uuid.uuid4().hex}"
+        archive_key = f"amberio:archive:{uuid.uuid4().hex}"
         archive_url = f"{args.archive_redis_url}/{archive_key}"
         redis_set_binary(args.archive_redis_url, archive_key, body)
 

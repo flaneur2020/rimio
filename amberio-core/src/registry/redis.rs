@@ -30,7 +30,7 @@ impl RedisRegistry {
             .await
             .map_err(|e| AmberError::Config(format!("Redis ping failed: {}", e)))?;
 
-        let prefix = format!("amberblob:{}", group_id);
+        let prefix = format!("amberio:{}", group_id);
 
         Ok(Self { client, prefix })
     }
@@ -87,9 +87,10 @@ impl Registry for RedisRegistry {
         let mut conn = self.get_conn().await?;
         let key = self.slot_key(slot_id);
 
-        let value: Option<Vec<u8>> = conn.get(&key).await.map_err(|e| {
-            AmberError::Internal(format!("Failed to get slot from Redis: {}", e))
-        })?;
+        let value: Option<Vec<u8>> = conn
+            .get(&key)
+            .await
+            .map_err(|e| AmberError::Internal(format!("Failed to get slot from Redis: {}", e)))?;
 
         match value {
             Some(data) => {
@@ -105,9 +106,10 @@ impl Registry for RedisRegistry {
         let key = self.slot_key(info.slot_id);
         let value = serde_json::to_vec(info)?;
 
-        let _: () = conn.set(key, value).await.map_err(|e| {
-            AmberError::Internal(format!("Failed to set slot in Redis: {}", e))
-        })?;
+        let _: () = conn
+            .set(key, value)
+            .await
+            .map_err(|e| AmberError::Internal(format!("Failed to set slot in Redis: {}", e)))?;
 
         Ok(())
     }

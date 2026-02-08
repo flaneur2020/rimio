@@ -1,4 +1,4 @@
-//! AmberBlob Core - Core library for lightweight object storage for edge cloud nodes
+//! Amberio Core - Core library for lightweight object storage for edge cloud nodes
 
 pub mod coordinator;
 pub mod error;

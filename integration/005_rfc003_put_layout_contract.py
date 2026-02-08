@@ -39,7 +39,7 @@ def main() -> None:
             body=body,
             headers={
                 "content-type": "application/octet-stream",
-                "x-amberblob-write-id": f"rfc003-put-{uuid.uuid4()}",
+                "x-amberio-write-id": f"rfc003-put-{uuid.uuid4()}",
             },
         )
         expect_status(put_response.status, {201}, "PUT blob")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integration test harness for AmberBlob.
+"""Integration test harness for Amberio.
 
 This harness:
 - Generates per-node config files dynamically.
@@ -25,7 +25,7 @@ from urllib import error, parse, request
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_BINARY = REPO_ROOT / "target" / "release" / "amberblob"
+DEFAULT_BINARY = REPO_ROOT / "target" / "release" / "amberio"
 
 
 @dataclass
@@ -74,8 +74,8 @@ class AmberCluster:
         self.build_if_missing = build_if_missing
 
         self.run_id = f"it-{int(time.time())}-{uuid.uuid4().hex[:6]}"
-        self.group_id = f"amberblob-{self.run_id}"
-        self.work_dir = Path(tempfile.mkdtemp(prefix=f"amberblob-{self.run_id}-"))
+        self.group_id = f"amberio-{self.run_id}"
+        self.work_dir = Path(tempfile.mkdtemp(prefix=f"amberio-{self.run_id}-"))
         self.nodes: List[NodeRuntime] = []
 
     def __enter__(self) -> "AmberCluster":
@@ -167,7 +167,7 @@ class AmberCluster:
             return
         if not self.build_if_missing:
             raise RuntimeError(
-                f"AmberBlob binary not found at {self.binary_path}. "
+                f"Amberio binary not found at {self.binary_path}. "
                 "Build it first or use --build-if-missing."
             )
 
@@ -176,9 +176,9 @@ class AmberCluster:
             "build",
             "--release",
             "-p",
-            "amberblob-server",
+            "amberio-server",
             "--bin",
-            "amberblob",
+            "amberio",
         ]
         print(f"[harness] building binary: {' '.join(command)}")
         subprocess.run(command, cwd=REPO_ROOT, check=True)
@@ -234,7 +234,7 @@ class AmberCluster:
         node.log_handle = open(node.log_path, "ab")
 
         environment = os.environ.copy()
-        environment.setdefault("RUST_LOG", "amberblob=info")
+        environment.setdefault("RUST_LOG", "amberio=info")
 
         node.process = subprocess.Popen(
             [str(self.binary_path), "server", "--config", str(node.config_path)],
@@ -370,11 +370,11 @@ def build_case_parser(case_id: str, description: str) -> argparse.ArgumentParser
     parser.add_argument(
         "--binary",
         default=str(DEFAULT_BINARY),
-        help="Path to amberblob server binary",
+        help="Path to amberio server binary",
     )
     parser.add_argument(
         "--redis-url",
-        default=os.getenv("AMBERBLOB_REDIS_URL", "redis://127.0.0.1:6379"),
+        default=os.getenv("AMBERIO_REDIS_URL", "redis://127.0.0.1:6379"),
         help="Redis URL for cluster registry",
     )
     parser.add_argument(
@@ -403,12 +403,12 @@ def build_case_parser(case_id: str, description: str) -> argparse.ArgumentParser
     )
     parser.add_argument(
         "--api-prefix",
-        default=os.getenv("AMBERBLOB_API_PREFIX", "/api/v1"),
+        default=os.getenv("AMBERIO_API_PREFIX", "/api/v1"),
         help="External API prefix",
     )
     parser.add_argument(
         "--internal-prefix",
-        default=os.getenv("AMBERBLOB_INTERNAL_PREFIX", "/internal/v1"),
+        default=os.getenv("AMBERIO_INTERNAL_PREFIX", "/internal/v1"),
         help="Internal API prefix",
     )
     parser.add_argument(
@@ -419,7 +419,7 @@ def build_case_parser(case_id: str, description: str) -> argparse.ArgumentParser
     parser.add_argument(
         "--build-if-missing",
         action="store_true",
-        help="Build amberblob binary automatically when not found",
+        help="Build amberio binary automatically when not found",
     )
     return parser
 

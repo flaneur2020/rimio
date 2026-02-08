@@ -1,5 +1,5 @@
 use crate::config::{Config, RegistryBackend};
-use amberblob_core::{
+use amberio_core::{
     AmberError, Coordinator, DeleteBlobOperation, EtcdRegistry, HealHeadsOperation,
     HealRepairOperation, HealSlotletsOperation, InternalGetHeadOperation, InternalGetPartOperation,
     InternalPutHeadOperation, InternalPutPartOperation, ListBlobsOperation, Node, NodeInfo,
@@ -70,9 +70,9 @@ pub async fn run_server(config: Config) -> Result<()> {
         .disks
         .first()
         .map(|disk| disk.path.clone())
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/amberblob"));
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/amberio"));
 
-    let slot_manager = Arc::new(amberblob_core::SlotManager::new(
+    let slot_manager = Arc::new(amberio_core::SlotManager::new(
         node_cfg.node_id.clone(),
         data_dir.clone(),
     )?);
@@ -197,7 +197,7 @@ pub async fn run_server(config: Config) -> Result<()> {
         .with_state(state);
 
     let listener = TcpListener::bind(&node_cfg.bind_addr).await?;
-    tracing::info!("AmberBlob listening on {}", node_cfg.bind_addr);
+    tracing::info!("Amberio listening on {}", node_cfg.bind_addr);
 
     axum::serve(listener, app)
         .await
@@ -276,10 +276,10 @@ pub(crate) fn response_error(status: StatusCode, message: impl Into<String>) -> 
         .into_response()
 }
 
-pub(crate) fn status_string(status: &amberblob_core::NodeStatus) -> &'static str {
+pub(crate) fn status_string(status: &amberio_core::NodeStatus) -> &'static str {
     match status {
-        amberblob_core::NodeStatus::Healthy => "healthy",
-        amberblob_core::NodeStatus::Degraded => "degraded",
-        amberblob_core::NodeStatus::Unhealthy => "unhealthy",
+        amberio_core::NodeStatus::Healthy => "healthy",
+        amberio_core::NodeStatus::Degraded => "degraded",
+        amberio_core::NodeStatus::Unhealthy => "unhealthy",
     }
 }

@@ -1,19 +1,19 @@
 [package]
-name = "amberblob-server"
+name = "amberio-server"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
-description = "Server binary for AmberBlob - lightweight object storage for edge cloud"
+description = "Server binary for Amberio - lightweight object storage for edge cloud"
 
 [[bin]]
-name = "amberblob"
+name = "amberio"
 path = "src/main.rs"
 
 [dependencies]
-amberblob-core = { path = "../amberblob-core" }
+amberio-core = { path = "../amberio-core" }
 
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.7", features = ["multipart"] }

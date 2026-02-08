@@ -1,10 +1,10 @@
 [workspace]
-members = ["amberblob-core", "amberblob-server"]
+members = ["amberio-core", "amberio-server"]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-authors = ["AmberBlob Contributors"]
+authors = ["Amberio Contributors"]
 license = "MIT"
-repository = "https://github.com/example/amberblob"
+repository = "https://github.com/example/amberio"

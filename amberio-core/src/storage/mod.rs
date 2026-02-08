@@ -1,4 +1,4 @@
-//! Storage modules for AmberBlob
+//! Storage modules for Amberio
 //!
 //! Provides filesystem part storage and metadata management.
 

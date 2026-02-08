@@ -1,4 +1,4 @@
-use amberblob_core::{AmberError, Result};
+use amberio_core::{AmberError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -92,7 +92,7 @@ impl Config {
     pub fn from_file(path: &str) -> Result<Self> {
         let settings = ::config::Config::builder()
             .add_source(::config::File::with_name(path))
-            .add_source(::config::Environment::with_prefix("AMBERBLOB"))
+            .add_source(::config::Environment::with_prefix("AMBERIO"))
             .build()
             .map_err(|e| AmberError::Config(e.to_string()))?;
 

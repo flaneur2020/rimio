@@ -23,7 +23,7 @@ replication:
 archive:
   archive_type: s3
   s3:
-    bucket: "amberblob-archive"
+    bucket: "amberio-archive"
     region: "us-east-1"
     credentials:
       access_key_id: "YOUR_ACCESS_KEY_ID"

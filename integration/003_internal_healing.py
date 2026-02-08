@@ -41,7 +41,7 @@ def main() -> None:
             body=payload,
             headers={
                 "content-type": "application/octet-stream",
-                "x-amberblob-write-id": f"w-{uuid.uuid4()}",
+                "x-amberio-write-id": f"w-{uuid.uuid4()}",
             },
         )
         expect_status(put_response.status, {201}, "PUT with one node offline")

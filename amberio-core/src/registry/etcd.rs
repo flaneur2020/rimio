@@ -16,7 +16,7 @@ impl EtcdRegistry {
     /// Create a new etcd registry client
     pub async fn new(endpoints: &[String], group_id: &str) -> Result<Self> {
         let client = Client::connect(endpoints, None).await?;
-        let prefix = format!("/amberblob/{}", group_id);
+        let prefix = format!("/amberio/{}", group_id);
 
         Ok(Self { client, prefix })
     }

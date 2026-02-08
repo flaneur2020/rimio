@@ -1,11 +1,11 @@
-# AmberBlob Integration Tests
+# Amberio Integration Tests
 
 These tests are contract tests for external/internal HTTP APIs, including RFC 0002 and RFC 0003 coverage.
 
 ## Prerequisites
 
 - Redis is running at `redis://127.0.0.1:6379` (default).
-- AmberBlob binary is available at `target/release/amberblob`, or pass `--build-if-missing`.
+- Amberio binary is available at `target/release/amberio`, or pass `--build-if-missing`.
 
 ## Run all cases
 

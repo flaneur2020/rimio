@@ -1,4 +1,4 @@
-use amberblob_core::{BlobMeta, TombstoneMeta};
+use amberio_core::{BlobMeta, TombstoneMeta};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]

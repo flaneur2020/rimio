@@ -4,7 +4,7 @@ use super::{
     InternalHeadApplyResponse, InternalHeadResponse, InternalPartPutResponse, InternalPartQuery,
     InternalPathQuery, ServerState, normalize_blob_path, response_error,
 };
-use amberblob_core::{
+use amberio_core::{
     AmberError, HeadKind, HealHeadsOperationRequest, HealRepairOperationRequest,
     HealSlotletsOperationRequest, InternalGetHeadOperationOutcome, InternalGetHeadOperationRequest,
     InternalGetPartOperationOutcome, InternalGetPartOperationRequest,
@@ -38,7 +38,7 @@ pub(crate) async fn internal_put_part(
         .generation
         .or_else(|| {
             headers
-                .get("x-amberblob-generation")
+                .get("x-amberio-generation")
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.parse::<i64>().ok())
         })
@@ -46,7 +46,7 @@ pub(crate) async fn internal_put_part(
 
     let Some(part_no) = query.part_no.or_else(|| {
         headers
-            .get("x-amberblob-part-no")
+            .get("x-amberio-part-no")
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<u32>().ok())
     }) else {
@@ -115,7 +115,7 @@ pub(crate) async fn internal_get_part(
                 HeaderValue::from_static("application/octet-stream"),
             );
             if let Ok(value) = HeaderValue::from_str(&part.sha256) {
-                response.headers_mut().insert("x-amberblob-sha256", value);
+                response.headers_mut().insert("x-amberio-sha256", value);
             }
             response
         }

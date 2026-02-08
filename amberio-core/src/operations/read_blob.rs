@@ -701,7 +701,7 @@ fn resolve_part_sha256(
     expected_sha256: Option<&str>,
 ) -> String {
     if let Some(headers) = headers {
-        if let Some(value) = headers.get("x-amberblob-sha256") {
+        if let Some(value) = headers.get("x-amberio-sha256") {
             if let Ok(value) = value.to_str() {
                 let trimmed = value.trim();
                 if !trimmed.is_empty() {

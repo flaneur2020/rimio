@@ -1,10 +1,10 @@
-# AmberBlob
+# Amberio
 
 Lightweight object storage for edge cloud nodes.
 
 ## Overview
 
-AmberBlob is a fixed-topology, leaderless object storage system designed for small-scale edge clusters (3-10 machines). It trades scalability for simplicity.
+Amberio is a fixed-topology, leaderless object storage system designed for small-scale edge clusters (3-10 machines). It trades scalability for simplicity.
 
 ## Key Features
 
@@ -53,13 +53,13 @@ cp config.example.yaml config.yaml
 ### 3. Initialize
 
 ```bash
-./target/release/amberblob init --config config.yaml
+./target/release/amberio init --config config.yaml
 ```
 
 ### 4. Run
 
 ```bash
-./target/release/amberblob server --config config.yaml
+./target/release/amberio server --config config.yaml
 ```
 
 ## API Endpoints

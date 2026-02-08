@@ -22,7 +22,7 @@ def main() -> None:
     with cluster_from_args(args) as cluster:
         blob_path = f"cases/002/{uuid.uuid4().hex}.txt"
         encoded_path = quote_blob_path(blob_path)
-        body = b"amberblob-integration-case-002\n"
+        body = b"amberio-integration-case-002\n"
 
         # PUT (first write)
         write_id = f"w-{uuid.uuid4()}"
@@ -33,7 +33,7 @@ def main() -> None:
             body=body,
             headers={
                 "content-type": "application/octet-stream",
-                "x-amberblob-write-id": write_id,
+                "x-amberio-write-id": write_id,
             },
         )
         expect_status(put_response.status, {201}, "PUT blob first write")
@@ -50,7 +50,7 @@ def main() -> None:
             body=body,
             headers={
                 "content-type": "application/octet-stream",
-                "x-amberblob-write-id": write_id,
+                "x-amberio-write-id": write_id,
             },
         )
         expect_status(put_retry_response.status, {200, 201}, "PUT idempotent retry")
@@ -73,7 +73,7 @@ def main() -> None:
         # HEAD blob metadata
         head_response = cluster.external_request(2 % cluster.node_count, "HEAD", f"/blobs/{encoded_path}")
         expect_status(head_response.status, {200}, "HEAD blob")
-        head_generation = head_response.headers.get("x-amberblob-generation")
+        head_generation = head_response.headers.get("x-amberio-generation")
         if head_generation != str(generation):
             raise AssertionError(
                 f"HEAD generation mismatch: expected {generation}, got {head_generation}"
@@ -102,7 +102,7 @@ def main() -> None:
             0,
             "DELETE",
             f"/blobs/{encoded_path}",
-            headers={"x-amberblob-write-id": f"d-{uuid.uuid4()}"},
+            headers={"x-amberio-write-id": f"d-{uuid.uuid4()}"},
         )
         expect_status(delete_response.status, {200, 204}, "DELETE blob")
 

@@ -1,4 +1,4 @@
-# AmberBlob 设计文档 (RFC 0001)
+# Amberio 设计文档 (RFC 0001)
 
 > 面向边缘云节点的轻量级 blob 存储
 
@@ -163,7 +163,7 @@ registry:
 archive:
   type: s3
   s3:
-    bucket: "amberblob-archive"
+    bucket: "amberio-archive"
     region: "us-east-1"
     credentials:
       access_key_id: "YOUR_ACCESS_KEY_ID"

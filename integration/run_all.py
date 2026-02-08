@@ -21,7 +21,7 @@ def discover_cases() -> list[Path]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run AmberBlob integration cases")
+    parser = argparse.ArgumentParser(description="Run Amberio integration cases")
     parser.add_argument(
         "--case-prefix",
         default="",

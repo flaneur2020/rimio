@@ -1,6 +1,6 @@
 mod config;
-use config::Config;
 use clap::{Parser, Subcommand};
+use config::Config;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -8,7 +8,7 @@ mod server;
 use server::run_server;
 
 #[derive(Parser)]
-#[command(name = "amberblob")]
+#[command(name = "amberio")]
 #[command(about = "Lightweight object storage for edge cloud nodes")]
 struct Cli {
     #[command(subcommand)]
@@ -36,7 +36,7 @@ async fn main() {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "amberblob=info".into()),
+                .unwrap_or_else(|_| "amberio=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -45,7 +45,7 @@ async fn main() {
 
     match cli.command {
         Commands::Server { config } => {
-            tracing::info!("Starting AmberBlob server with config: {}", config);
+            tracing::info!("Starting Amberio server with config: {}", config);
 
             let cfg = match Config::from_file(&config) {
                 Ok(c) => c,
@@ -67,7 +67,7 @@ async fn main() {
             }
         }
         Commands::Init { config } => {
-            tracing::info!("Initializing AmberBlob node with config: {}", config);
+            tracing::info!("Initializing Amberio node with config: {}", config);
 
             let cfg = match Config::from_file(&config) {
                 Ok(c) => c,
@@ -79,11 +79,11 @@ async fn main() {
 
             // Create data directories
             for disk in &cfg.node.disks {
-                let amberblob_dir = disk.path.join("amberblob");
-                match std::fs::create_dir_all(&amberblob_dir) {
-                    Ok(_) => tracing::info!("Created directory: {:?}", amberblob_dir),
+                let amberio_dir = disk.path.join("amberio");
+                match std::fs::create_dir_all(&amberio_dir) {
+                    Ok(_) => tracing::info!("Created directory: {:?}", amberio_dir),
                     Err(e) => {
-                        tracing::error!("Failed to create directory {:?}: {}", amberblob_dir, e);
+                        tracing::error!("Failed to create directory {:?}: {}", amberio_dir, e);
                         std::process::exit(1);
                     }
                 }

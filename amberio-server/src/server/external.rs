@@ -3,7 +3,7 @@ use super::{
     ResolveSlotQuery, ResolveSlotResponse, ServerState, current_nodes, normalize_blob_path,
     resolve_replica_nodes, response_error, status_string,
 };
-use amberblob_core::{
+use amberio_core::{
     AmberError, DeleteBlobOperationOutcome, DeleteBlobOperationRequest, ListBlobsOperationRequest,
     PutBlobOperationOutcome, PutBlobOperationRequest, ReadBlobOperationOutcome,
     ReadBlobOperationRequest, ReadByteRange, slot_for_key,
@@ -92,7 +92,7 @@ pub(crate) async fn v1_put_blob(
 
     let slot_id = slot_for_key(&path, state.config.replication.total_slots);
     let write_id = headers
-        .get("x-amberblob-write-id")
+        .get("x-amberio-write-id")
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -250,9 +250,7 @@ pub(crate) async fn v1_get_blob(
         response.headers_mut().insert(header::ETAG, value);
     }
     if let Ok(value) = HeaderValue::from_str(&result.meta.generation.to_string()) {
-        response
-            .headers_mut()
-            .insert("x-amberblob-generation", value);
+        response.headers_mut().insert("x-amberio-generation", value);
     }
 
     if requested_range.is_some() {
@@ -314,9 +312,7 @@ pub(crate) async fn v1_head_blob(
         response.headers_mut().insert(header::ETAG, value);
     }
     if let Ok(value) = HeaderValue::from_str(&result.meta.generation.to_string()) {
-        response
-            .headers_mut()
-            .insert("x-amberblob-generation", value);
+        response.headers_mut().insert("x-amberio-generation", value);
     }
     if let Ok(value) = HeaderValue::from_str(&result.meta.size_bytes.to_string()) {
         response.headers_mut().insert(header::CONTENT_LENGTH, value);
@@ -340,7 +336,7 @@ pub(crate) async fn v1_delete_blob(
 
     let slot_id = slot_for_key(&path, state.config.replication.total_slots);
     let write_id = headers
-        .get("x-amberblob-write-id")
+        .get("x-amberio-write-id")
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

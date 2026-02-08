@@ -138,10 +138,10 @@ impl Coordinator {
             let response = self
                 .client
                 .put(part_url)
-                .header("x-amberblob-write-id", write_id)
-                .header("x-amberblob-generation", generation.to_string())
-                .header("x-amberblob-part-no", part.part_no.to_string())
-                .header("x-amberblob-part-length", part.length.to_string())
+                .header("x-amberio-write-id", write_id)
+                .header("x-amberio-generation", generation.to_string())
+                .header("x-amberio-part-no", part.part_no.to_string())
+                .header("x-amberio-part-length", part.length.to_string())
                 .header(header::CONTENT_TYPE, "application/octet-stream")
                 .body(part.data.clone())
                 .send()
@@ -171,7 +171,7 @@ impl Coordinator {
         let response = self
             .client
             .put(head_url)
-            .header("x-amberblob-write-id", write_id)
+            .header("x-amberio-write-id", write_id)
             .header(header::CONTENT_TYPE, "application/json")
             .json(&payload)
             .send()
@@ -212,7 +212,7 @@ impl Coordinator {
         let response = self
             .client
             .put(head_url)
-            .header("x-amberblob-write-id", write_id)
+            .header("x-amberio-write-id", write_id)
             .header(header::CONTENT_TYPE, "application/json")
             .json(&payload)
             .send()

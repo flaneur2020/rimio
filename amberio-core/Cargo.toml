@@ -1,12 +1,12 @@
 [package]
-name = "amberblob-core"
+name = "amberio-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
-description = "Core library for AmberBlob - lightweight object storage for edge cloud"
+description = "Core library for Amberio - lightweight object storage for edge cloud"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

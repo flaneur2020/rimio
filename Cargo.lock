@@ -30,7 +30,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "amberblob-core"
+name = "amberio-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -54,10 +54,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "amberblob-server"
+name = "amberio-server"
 version = "0.1.0"
 dependencies = [
- "amberblob-core",
+ "amberio-core",
  "anyhow",
  "axum 0.7.9",
  "bytes",

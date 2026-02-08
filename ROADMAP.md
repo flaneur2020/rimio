@@ -1,4 +1,4 @@
-# AmberBlob Roadmap
+# Amberio Roadmap
 
 ## Project Vision
 
