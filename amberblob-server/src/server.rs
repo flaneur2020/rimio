@@ -1,808 +1,1858 @@
 use crate::config::{Config, RegistryBackend};
 use amberblob_core::{
-    AmberError, Result,
-    Node, NodeInfo,
-    SlotManager, SlotInfo, SlotHealth, ReplicaStatus, slot_for_key, TOTAL_SLOTS, CHUNK_SIZE,
-    ChunkStore, compute_hash,
-    MetadataStore, BlobMeta, ChunkRef,
-    EtcdRegistry, RedisRegistry, Registry,
-    TwoPhaseCommit, TwoPhaseParticipant, Vote,
+    AmberError, BlobHead, BlobMeta, CHUNK_SIZE, ChunkRef, ChunkStore, EtcdRegistry, HeadKind,
+    MetadataStore, Node, NodeInfo, RedisRegistry, Registry, Result, TombstoneMeta, compute_hash,
+    slot_for_key,
 };
 use axum::{
+    Json, Router,
     body::Bytes,
-    extract::{Path, State, Query},
-    http::StatusCode,
+    extract::{Path, Query, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
-    Router,
+    routing::{get, post, put},
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use ulid::Ulid;
+use tokio::net::TcpListener;
+use tokio::sync::RwLock;
+use tokio::time::{Duration, interval};
 
 pub struct ServerState {
-    pub node: Arc<Node>,
-    pub slot_manager: Arc<SlotManager>,
-    pub chunk_store: Arc<ChunkStore>,
-    pub registry: Arc<dyn Registry>,
-    pub twopc_coordinator: Arc<TwoPhaseCommit>,
-    pub twopc_participant: Arc<TwoPhaseParticipant>,
-    pub config: Config,
+    node: Arc<Node>,
+    slot_manager: Arc<amberblob_core::SlotManager>,
+    chunk_store: Arc<ChunkStore>,
+    registry: Arc<dyn Registry>,
+    config: Config,
+    client: reqwest::Client,
+    idempotent_puts: Arc<RwLock<HashMap<String, PutCacheEntry>>>,
+}
+
+#[derive(Debug, Clone)]
+struct PutCacheEntry {
+    generation: i64,
+    etag: String,
+    size_bytes: u64,
+    committed_replicas: usize,
 }
 
 #[derive(Debug, Serialize)]
-struct ApiResponse<T> {
-    success: bool,
-    data: Option<T>,
-    error: Option<String>,
+struct ErrorResponse {
+    error: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HealthResponse {
+    status: String,
+    node_id: String,
+    group_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct NodesResponse {
+    nodes: Vec<NodeItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct NodeItem {
+    node_id: String,
+    address: String,
+    status: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct GetObjectQuery {
-    #[serde(default)]
-    version: Option<i64>,
-    #[serde(default)]
-    start: Option<u64>,
-    #[serde(default)]
-    end: Option<u64>,
+struct ResolveSlotQuery {
+    path: String,
 }
 
 #[derive(Debug, Serialize)]
-struct ObjectResponse {
+struct ResolveSlotResponse {
     path: String,
-    version: i64,
-    blob_id: String,
-    size: u64,
-    chunks: Vec<ChunkRef>,
-    created_at: String,
-    tombstoned_at: Option<String>,
+    slot_id: u16,
+    replicas: Vec<String>,
+    write_quorum: usize,
 }
 
 #[derive(Debug, Serialize)]
-struct WriteResponse {
+struct PutBlobResponse {
     path: String,
-    version: i64,
-    blob_id: String,
-    chunks_stored: usize,
+    slot_id: u16,
+    generation: i64,
+    etag: String,
+    size_bytes: u64,
+    committed_replicas: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    idempotent_replay: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ListQuery {
-    #[serde(default = "default_prefix")]
+    #[serde(default)]
     prefix: String,
     #[serde(default = "default_limit")]
     limit: usize,
     #[serde(default)]
-    include_tombstoned: bool,
+    cursor: Option<String>,
+    #[serde(default)]
+    include_deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ListResponse {
+    items: Vec<ListItem>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListItem {
+    path: String,
+    generation: i64,
+    etag: String,
+    size_bytes: u64,
+    deleted: bool,
+    updated_at: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct PutObjectQuery {
-    #[serde(default)]
-    version: Option<i64>,
+struct InternalPathQuery {
+    path: Option<String>,
 }
 
-fn default_prefix() -> String {
-    "".to_string()
+#[derive(Debug, Serialize)]
+struct InternalPartPutResponse {
+    accepted: bool,
+    reused: bool,
+    sha256: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct InternalHeadApplyRequest {
+    head_kind: String,
+    generation: i64,
+    head_sha256: String,
+    meta: Option<BlobMeta>,
+    tombstone: Option<TombstoneMeta>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct InternalHeadResponse {
+    found: bool,
+    head_kind: Option<String>,
+    generation: Option<i64>,
+    head_sha256: Option<String>,
+    meta: Option<BlobMeta>,
+    tombstone: Option<TombstoneMeta>,
+}
+
+#[derive(Debug, Serialize)]
+struct InternalHeadApplyResponse {
+    applied: bool,
+    head_kind: String,
+    generation: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct HealBucketsQuery {
+    #[serde(default = "default_bucket_prefix_len")]
+    prefix_len: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct HealBucketsResponse {
+    slot_id: u16,
+    prefix_len: usize,
+    buckets: Vec<HealBucket>,
+}
+
+#[derive(Debug, Serialize)]
+struct HealBucket {
+    prefix: String,
+    digest: String,
+    objects: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct HealHeadsRequest {
+    prefixes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct HealHeadsResponse {
+    slot_id: u16,
+    heads: Vec<HealHeadItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct HealHeadItem {
+    path: String,
+    head_kind: String,
+    generation: i64,
+    head_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HealRepairRequest {
+    source_node_id: String,
+    blob_paths: Vec<String>,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct HealRepairResponse {
+    slot_id: u16,
+    repaired_objects: usize,
+    skipped_objects: usize,
+    errors: Vec<String>,
+}
+
+#[derive(Clone)]
+struct PartPayload {
+    part: ChunkRef,
+    data: Bytes,
 }
 
 fn default_limit() -> usize {
     100
 }
 
-pub async fn run_server(config: Config) -> Result<()> {
-    let node_config = config.node.clone();
+fn default_bucket_prefix_len() -> usize {
+    2
+}
 
-    // Collect disk paths for Node
-    let disk_paths: Vec<std::path::PathBuf> = node_config.disks.iter().map(|d| d.path.clone()).collect();
+pub async fn run_server(config: Config) -> Result<()> {
+    let node_cfg = config.node.clone();
+
+    let disk_paths: Vec<std::path::PathBuf> = node_cfg
+        .disks
+        .iter()
+        .map(|disk| disk.path.clone())
+        .collect();
 
     let node = Arc::new(Node::new(
-        node_config.node_id.clone(),
-        node_config.group_id.clone(),
-        node_config.bind_addr.clone(),
+        node_cfg.node_id.clone(),
+        node_cfg.group_id.clone(),
+        node_cfg.bind_addr.clone(),
         disk_paths,
     )?);
 
-    // Initialize slot manager with first disk
-    let data_dir = if !node_config.disks.is_empty() {
-        node_config.disks[0].path.clone()
-    } else {
-        std::path::PathBuf::from("/tmp/amberblob")
-    };
-    let slot_manager = Arc::new(SlotManager::new(
-        node_config.node_id.clone(),
+    let data_dir = node_cfg
+        .disks
+        .first()
+        .map(|disk| disk.path.clone())
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/amberblob"));
+
+    let slot_manager = Arc::new(amberblob_core::SlotManager::new(
+        node_cfg.node_id.clone(),
         data_dir.clone(),
     )?);
 
-    // Initialize chunk store at data directory
     let chunk_store = Arc::new(ChunkStore::new(data_dir)?);
 
-    // Connect to registry (etcd or redis)
     let registry: Arc<dyn Registry> = match config.registry.backend {
         RegistryBackend::Etcd => {
-            let etcd_config = config.registry.etcd.as_ref()
-                .ok_or_else(|| AmberError::Config("etcd configuration is required for etcd backend".to_string()))?;
-            Arc::new(EtcdRegistry::new(&etcd_config.endpoints, &node_config.group_id).await?)
+            let etcd_cfg = config.registry.etcd.as_ref().ok_or_else(|| {
+                AmberError::Config("etcd configuration is required for etcd backend".to_string())
+            })?;
+            Arc::new(EtcdRegistry::new(&etcd_cfg.endpoints, &node_cfg.group_id).await?)
         }
         RegistryBackend::Redis => {
-            let redis_config = config.registry.redis.as_ref()
-                .ok_or_else(|| AmberError::Config("redis configuration is required for redis backend".to_string()))?;
-            Arc::new(RedisRegistry::new(&redis_config.url, &node_config.group_id).await?)
+            let redis_cfg = config.registry.redis.as_ref().ok_or_else(|| {
+                AmberError::Config("redis configuration is required for redis backend".to_string())
+            })?;
+            Arc::new(RedisRegistry::new(&redis_cfg.url, &node_cfg.group_id).await?)
         }
     };
-
-    // Initialize 2PC
-    let twopc_coordinator = Arc::new(TwoPhaseCommit::new(node_config.node_id.clone()));
-    let twopc_participant = Arc::new(TwoPhaseParticipant::new(node_config.node_id.clone()));
 
     let state = Arc::new(ServerState {
-        node: node.clone(),
+        node,
         slot_manager,
         chunk_store,
-        registry: registry.clone(),
-        twopc_coordinator,
-        twopc_participant,
+        registry,
         config,
+        client: reqwest::Client::new(),
+        idempotent_puts: Arc::new(RwLock::new(HashMap::new())),
     });
 
-    // Register node in registry
-    let node_info = node.info().await;
-    registry.register_node(&node_info).await?;
+    register_local_node(&state).await?;
 
-    // Assign slots (simplified - in production this would come from a bootstrap process)
-    assign_slots(&state).await?;
+    {
+        let heartbeat_state = state.clone();
+        tokio::spawn(async move {
+            let mut ticker = interval(Duration::from_secs(20));
+            loop {
+                ticker.tick().await;
+                if let Err(error) = register_local_node(&heartbeat_state).await {
+                    tracing::warn!("Failed to refresh node registration: {}", error);
+                }
+            }
+        });
+    }
 
-    // Start background tasks
-    let health_check_state = state.clone();
-    tokio::spawn(async move {
-        health_check_loop(health_check_state).await;
-    });
-
-    // Build router
     let app = Router::new()
-        .route("/health", get(health_handler))
-        .route("/objects/*path", get(get_object).put(put_object).delete(delete_object))
-        .route("/objects", get(list_objects))
-        .route("/slots/:slot_id", get(get_slot_info))
-        .route("/nodes", get(list_nodes))
+        .route("/health", get(health))
+        .route("/api/v1/healthz", get(v1_healthz))
+        .route("/api/v1/nodes", get(v1_nodes))
+        .route("/api/v1/slots/resolve", get(v1_resolve_slot))
+        .route("/api/v1/blobs", get(v1_list_blobs))
+        .route(
+            "/api/v1/blobs/*path",
+            get(v1_get_blob)
+                .head(v1_head_blob)
+                .put(v1_put_blob)
+                .delete(v1_delete_blob),
+        )
+        .route(
+            "/internal/v1/slots/:slot_id/parts/:sha256",
+            put(internal_put_part).get(internal_get_part),
+        )
+        .route(
+            "/internal/v1/slots/:slot_id/heads",
+            put(internal_put_head).get(internal_get_head),
+        )
+        .route(
+            "/internal/v1/slots/:slot_id/heal/buckets",
+            get(v1_internal_heal_buckets),
+        )
+        .route(
+            "/internal/v1/slots/:slot_id/heal/heads",
+            post(v1_internal_heal_heads),
+        )
+        .route(
+            "/internal/v1/slots/:slot_id/heal/repair",
+            post(v1_internal_heal_repair),
+        )
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(&node_config.bind_addr).await?;
-    tracing::info!("Server listening on {}", node_config.bind_addr);
+    let listener = TcpListener::bind(&node_cfg.bind_addr).await?;
+    tracing::info!("AmberBlob listening on {}", node_cfg.bind_addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .await
+        .map_err(|error| AmberError::Http(error.to_string()))?;
 
     Ok(())
 }
 
-async fn assign_slots(state: &Arc<ServerState>) -> Result<()> {
-    // Get all nodes and determine slot assignment
-    let nodes = state.registry.get_nodes().await?;
+async fn register_local_node(state: &ServerState) -> Result<()> {
+    let info = state.node.info().await;
+    state.registry.register_node(&info).await
+}
 
-    // Simple assignment: divide slots evenly among nodes
-    let node_count = nodes.len().max(1);
-    let slots_per_node = TOTAL_SLOTS as usize / node_count;
-    let my_node_id = state.node.node_id();
+async fn ensure_store(state: &ServerState, slot_id: u16) -> Result<MetadataStore> {
+    if !state.slot_manager.has_slot(slot_id).await {
+        state.slot_manager.init_slot(slot_id).await?;
+    }
 
-    let my_index = nodes.iter().position(|n| n.node_id == my_node_id).unwrap_or(0);
-    let start_slot = my_index * slots_per_node;
-    let end_slot = if my_index == node_count - 1 {
-        TOTAL_SLOTS as usize
-    } else {
-        start_slot + slots_per_node
+    let slot = state.slot_manager.get_slot(slot_id).await?;
+    MetadataStore::new(slot)
+}
+
+async fn current_nodes(state: &ServerState) -> Result<Vec<NodeInfo>> {
+    let mut nodes = state.registry.get_nodes().await.unwrap_or_default();
+
+    let local = state.node.info().await;
+    if !nodes.iter().any(|node| node.node_id == local.node_id) {
+        nodes.push(local);
+    }
+
+    nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    nodes.dedup_by(|a, b| a.node_id == b.node_id);
+
+    Ok(nodes)
+}
+
+async fn resolve_replica_nodes(state: &ServerState, slot_id: u16) -> Result<Vec<NodeInfo>> {
+    let nodes = current_nodes(state).await?;
+    if nodes.is_empty() {
+        return Err(AmberError::Internal("no nodes found".to_string()));
+    }
+
+    let start = (slot_id as usize) % nodes.len();
+    let mut rotated = Vec::with_capacity(nodes.len());
+    for index in 0..nodes.len() {
+        rotated.push(nodes[(start + index) % nodes.len()].clone());
+    }
+
+    let replica_count = rotated.len().min(3).max(1);
+    Ok(rotated.into_iter().take(replica_count).collect())
+}
+
+fn write_quorum(state: &ServerState, replica_count: usize) -> usize {
+    state
+        .config
+        .replication
+        .min_write_replicas
+        .min(replica_count)
+        .max(1)
+}
+
+fn normalize_blob_path(path: &str) -> Result<String> {
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        return Err(AmberError::InvalidRequest(
+            "blob path cannot be empty".to_string(),
+        ));
+    }
+
+    let mut components = Vec::new();
+    for component in trimmed.split('/') {
+        if component.is_empty() || component == "." || component == ".." {
+            return Err(AmberError::InvalidRequest(format!(
+                "invalid blob path component: {}",
+                component
+            )));
+        }
+        components.push(component);
+    }
+
+    Ok(components.join("/"))
+}
+
+fn response_error(status: StatusCode, message: impl Into<String>) -> Response {
+    (
+        status,
+        Json(ErrorResponse {
+            error: message.into(),
+        }),
+    )
+        .into_response()
+}
+
+fn status_string(status: &amberblob_core::NodeStatus) -> &'static str {
+    match status {
+        amberblob_core::NodeStatus::Healthy => "healthy",
+        amberblob_core::NodeStatus::Degraded => "degraded",
+        amberblob_core::NodeStatus::Unhealthy => "unhealthy",
+    }
+}
+
+async fn health(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
+    Json(HealthResponse {
+        status: "ok".to_string(),
+        node_id: state.node.node_id().to_string(),
+        group_id: state.node.group_id().to_string(),
+    })
+}
+
+async fn v1_healthz(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
+    Json(HealthResponse {
+        status: "ok".to_string(),
+        node_id: state.node.node_id().to_string(),
+        group_id: state.node.group_id().to_string(),
+    })
+}
+
+async fn v1_nodes(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
+    let nodes = match current_nodes(&state).await {
+        Ok(nodes) => nodes,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
 
-    let my_slots: Vec<u16> = (start_slot..end_slot).map(|i| i as u16).collect();
+    let payload = NodesResponse {
+        nodes: nodes
+            .into_iter()
+            .map(|node| NodeItem {
+                node_id: node.node_id,
+                address: node.address,
+                status: status_string(&node.status).to_string(),
+            })
+            .collect(),
+    };
 
-    // Initialize each slot
-    for slot_id in &my_slots {
-        state.slot_manager.init_slot(*slot_id).await?;
-    }
-
-    state.node.assign_slots(my_slots).await;
-
-    tracing::info!(
-        "Node {} assigned slots {} to {}",
-        my_node_id,
-        start_slot,
-        end_slot - 1
-    );
-
-    Ok(())
+    (StatusCode::OK, Json(payload)).into_response()
 }
 
-async fn health_check_loop(state: Arc<ServerState>) {
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-
-    loop {
-        interval.tick().await;
-
-        let slots = state.slot_manager.get_assigned_slots().await;
-        for slot_id in slots {
-            // Use latest blob_id instead of seq for health reporting
-            let blob_id = match get_latest_blob_id_for_slot(&state, slot_id).await {
-                Ok(Some(id)) => id,
-                _ => continue,
-            };
-
-            let health = SlotHealth {
-                slot_id,
-                node_id: state.node.node_id().to_string(),
-                seq: blob_id,  // Using blob_id as the sequence identifier
-                status: ReplicaStatus::Healthy,
-                last_updated: chrono::Utc::now(),
-            };
-
-            if let Err(e) = state.registry.report_health(&health).await {
-                tracing::warn!("Failed to report health for slot {}: {}", slot_id, e);
-            }
-        }
-    }
-}
-
-async fn get_latest_blob_id_for_slot(state: &Arc<ServerState>, slot_id: u16) -> Result<Option<String>> {
-    let slot = state.slot_manager.get_slot(slot_id).await?;
-    let store = MetadataStore::new(slot)?;
-    store.get_latest_blob_id().map(|opt| opt.map(|ulid| ulid.to_string()))
-}
-
-async fn health_handler(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
-    let info = state.node.info().await;
-    let slots = state.slot_manager.get_assigned_slots().await;
-
-    let response = serde_json::json!({
-        "node_id": info.node_id,
-        "group_id": info.group_id,
-        "status": info.status,
-        "slots_count": slots.len(),
-    });
-
-    (StatusCode::OK, axum::Json(response))
-}
-
-async fn get_object(
+async fn v1_resolve_slot(
     State(state): State<Arc<ServerState>>,
-    Path(path): Path<String>,
-    Query(query): Query<GetObjectQuery>,
+    Query(query): Query<ResolveSlotQuery>,
 ) -> impl IntoResponse {
-    let slot_id = slot_for_key(&path, TOTAL_SLOTS);
+    let path = match normalize_blob_path(&query.path) {
+        Ok(path) => path,
+        Err(error) => return response_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
 
-    // Check if we have the slot locally
-    if state.slot_manager.has_slot(slot_id).await {
-        // Read from local storage
-        match get_blob_local(&state, &path, query.version, slot_id).await {
-            Ok(meta) => {
-                // Handle range request
-                let start = query.start.unwrap_or(0) as usize;
-                let end = query.end.map(|e| e as usize).unwrap_or(meta.size as usize);
+    let slot_id = slot_for_key(&path, state.config.replication.total_slots);
+    let replicas = match resolve_replica_nodes(&state, slot_id).await {
+        Ok(replicas) => replicas,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
 
-                // Stream the blob data
-                match stream_blob(&state, &meta, start, end).await {
-                    Ok(data) => (StatusCode::OK, data).into_response(),
-                    Err(e) => {
-                        let resp = ApiResponse::<()> {
-                            success: false,
-                            data: None,
-                            error: Some(e.to_string()),
-                        };
-                        (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(resp)).into_response()
-                    }
-                }
-            }
-            Err(e) => {
-                let resp = ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    error: Some(e.to_string()),
-                };
-                (StatusCode::NOT_FOUND, axum::Json(resp)).into_response()
-            }
-        }
-    } else {
-        // Proxy to a replica that has the slot
-        match proxy_to_replica(&state, slot_id, &path, query.version).await {
-            Ok(response) => response,
-            Err(e) => {
-                let resp = ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    error: Some(e.to_string()),
-                };
-                (StatusCode::NOT_FOUND, axum::Json(resp)).into_response()
-            }
-        }
-    }
+    let write_quorum_value = write_quorum(&state, replicas.len());
+
+    let payload = ResolveSlotResponse {
+        path,
+        slot_id,
+        replicas: replicas.into_iter().map(|node| node.node_id).collect(),
+        write_quorum: write_quorum_value,
+    };
+
+    (StatusCode::OK, Json(payload)).into_response()
 }
 
-async fn get_blob_local(
-    state: &Arc<ServerState>,
-    path: &str,
-    version: Option<i64>,
-    slot_id: u16,
-) -> Result<BlobMeta> {
-    let slot = state.slot_manager.get_slot(slot_id).await?;
-    let store = MetadataStore::new(slot)?;
-
-    match version {
-        Some(v) => store
-            .get_blob(path, v)?
-            .ok_or_else(|| AmberError::ObjectNotFound(format!("{}@v{}", path, v))),
-        None => store
-            .get_latest_blob(path)?
-            .ok_or_else(|| AmberError::ObjectNotFound(path.to_string())),
-    }
-}
-
-async fn stream_blob(
-    state: &Arc<ServerState>,
-    meta: &BlobMeta,
-    start: usize,
-    end: usize,
-) -> Result<Vec<u8>> {
-    let mut result = Vec::new();
-    let mut current_pos = 0usize;
-
-    for (_index, chunk) in meta.chunks.iter().enumerate() {
-        let chunk_start = current_pos;
-        let chunk_end = current_pos + chunk.len as usize;
-
-        // Check if this chunk overlaps with the requested range
-        if chunk_end > start && chunk_start < end {
-            let data = state.chunk_store.get_chunk(&meta.blob_id, &chunk.id).await?;
-
-            let chunk_offset_start = start.saturating_sub(chunk_start);
-            let chunk_offset_end = if end < chunk_end {
-                end - chunk_start
-            } else {
-                chunk.len as usize
-            };
-
-            result.extend_from_slice(&data[chunk_offset_start..chunk_offset_end]);
-        }
-
-        current_pos = chunk_end;
-    }
-
-    Ok(result)
-}
-
-async fn proxy_to_replica(
-    state: &Arc<ServerState>,
-    slot_id: u16,
-    path: &str,
-    version: Option<i64>,
-) -> Result<Response> {
-    // Get healthy replicas from registry
-    let replicas = state.registry.get_healthy_replicas(slot_id).await?;
-
-    if replicas.is_empty() {
-        return Err(AmberError::InsufficientReplicas {
-            required: 1,
-            found: 0,
-        });
-    }
-
-    // Pick the first healthy replica
-    let target_node = &replicas[0].0;
-
-    // Get node info to find address
-    let nodes = state.registry.get_nodes().await?;
-    let target = nodes
-        .into_iter()
-        .find(|n| &n.node_id == target_node)
-        .ok_or_else(|| AmberError::Internal("Target node not found".to_string()))?;
-
-    // Forward request
-    let client = reqwest::Client::new();
-    let mut url = format!("http://{}/objects/{}", target.address, path);
-    if let Some(v) = version {
-        url.push_str(&format!("?version={}", v));
-    }
-
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| AmberError::Http(e.to_string()))?;
-
-    let status = StatusCode::from_u16(response.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| AmberError::Http(e.to_string()))?;
-
-    Ok((status, body).into_response())
-}
-
-async fn put_object(
+async fn v1_put_blob(
     State(state): State<Arc<ServerState>>,
-    Path(path): Path<String>,
-    Query(query): Query<PutObjectQuery>,
+    Path(raw_path): Path<String>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let slot_id = slot_for_key(&path, TOTAL_SLOTS);
-
-    // Get healthy replicas
-    let replicas = match state.registry.get_healthy_replicas(slot_id).await {
-        Ok(r) => r,
-        Err(e) => {
-            let resp = ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some(e.to_string()),
-            };
-            return (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(resp)).into_response();
-        }
+    let path = match normalize_blob_path(&raw_path) {
+        Ok(path) => path,
+        Err(error) => return response_error(StatusCode::BAD_REQUEST, error.to_string()),
     };
 
-    if replicas.len() < state.config.replication.min_write_replicas {
-        let resp = ApiResponse::<()> {
-            success: false,
-            data: None,
-            error: Some(format!(
-                "Insufficient replicas: need {}, found {}",
-                state.config.replication.min_write_replicas,
-                replicas.len()
-            )),
+    let slot_id = slot_for_key(&path, state.config.replication.total_slots);
+    let write_id = headers
+        .get("x-amberblob-write-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("auto-{}", ulid::Ulid::new()));
+
+    let cache_key = format!("{}:{}:{}", slot_id, path, write_id);
+    if let Some(cached) = state.idempotent_puts.read().await.get(&cache_key).cloned() {
+        let response = PutBlobResponse {
+            path,
+            slot_id,
+            generation: cached.generation,
+            etag: cached.etag,
+            size_bytes: cached.size_bytes,
+            committed_replicas: cached.committed_replicas,
+            idempotent_replay: Some(true),
         };
-        return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(resp)).into_response();
+
+        return (StatusCode::OK, Json(response)).into_response();
     }
 
-    // Get the slot for version calculation and storage
-    let slot = match state.slot_manager.get_slot(slot_id).await {
-        Ok(s) => s,
-        Err(e) => {
-            let resp = ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some(format!("Slot not available: {}", e)),
-            };
-            return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(resp)).into_response();
-        }
+    let store = match ensure_store(&state, slot_id).await {
+        Ok(store) => store,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
 
-    let store = match MetadataStore::new(slot) {
-        Ok(s) => s,
-        Err(e) => {
-            let resp = ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some(e.to_string()),
-            };
-            return (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(resp)).into_response();
-        }
+    let generation = match store.next_generation(&path) {
+        Ok(generation) => generation,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
 
-    // Determine version
-    let version = match query.version {
-        Some(v) => v,
-        None => {
-            let max = store.get_max_version(&path).unwrap_or(0);
-            max + 1
+    let etag = compute_hash(&body);
+    let mut part_payloads = Vec::new();
+
+    let mut offset = 0usize;
+    while offset < body.len() {
+        let end = (offset + CHUNK_SIZE).min(body.len());
+        let part_body = body.slice(offset..end);
+        let part_sha = compute_hash(&part_body);
+
+        let put_result = match state
+            .chunk_store
+            .put_part(slot_id, &path, &part_sha, part_body.clone())
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+        };
+
+        let part = ChunkRef {
+            name: format!("part.{}", part_sha),
+            sha256: part_sha,
+            offset: offset as u64,
+            length: (end - offset) as u64,
+            external_path: Some(put_result.part_path.to_string_lossy().to_string()),
+            archive_url: None,
+        };
+
+        if let Err(error) = store.upsert_part_entry(&path, &part) {
+            return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
         }
-    };
 
-    // Generate blob_id (ULID)
-    let blob_id = Ulid::new().to_string();
+        part_payloads.push(PartPayload {
+            part,
+            data: part_body,
+        });
+        offset = end;
+    }
 
-    // Split body into chunks and store
-    let chunks = match store_chunks(&state, &blob_id, &body).await {
-        Ok(c) => c,
-        Err(e) => {
-            // Clean up any stored chunks on failure
-            let _ = state.chunk_store.delete_blob_chunks(&blob_id).await;
-            let resp = ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some(e.to_string()),
-            };
-            return (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(resp)).into_response();
-        }
-    };
-
-    // Create blob metadata
     let meta = BlobMeta {
         path: path.clone(),
-        version,
-        blob_id: blob_id.clone(),
-        size: body.len() as u64,
-        chunks,
-        created_at: chrono::Utc::now(),
-        tombstoned_at: None,
+        slot_id,
+        generation,
+        version: generation,
+        size_bytes: body.len() as u64,
+        etag: etag.clone(),
+        parts: part_payloads
+            .iter()
+            .map(|payload| payload.part.clone())
+            .collect(),
+        updated_at: Utc::now(),
     };
 
-    // Perform 2PC
-    let participants: Vec<String> = replicas.iter().map(|(id, _)| id.clone()).collect();
+    let meta_bytes = match serde_json::to_vec(&meta) {
+        Ok(bytes) => bytes,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    let meta_sha = compute_hash(&meta_bytes);
 
-    match perform_2pc(&state, participants, slot_id, meta).await {
-        Ok(_) => {
-            let resp = WriteResponse {
+    let applied = match store.upsert_meta_with_payload(&meta, &meta_bytes, &meta_sha) {
+        Ok(applied) => applied,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    if !applied {
+        return response_error(
+            StatusCode::CONFLICT,
+            "meta commit rejected by generation check",
+        );
+    }
+
+    let replicas = match resolve_replica_nodes(&state, slot_id).await {
+        Ok(replicas) => replicas,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let quorum = write_quorum(&state, replicas.len());
+    let local_node_id = state.node.node_id().to_string();
+    let mut committed_replicas = 1usize;
+
+    for replica in replicas.iter().filter(|node| node.node_id != local_node_id) {
+        let write_result = replicate_meta_write(
+            &state,
+            replica,
+            slot_id,
+            &path,
+            &write_id,
+            generation,
+            &part_payloads,
+            &meta,
+            &meta_sha,
+        )
+        .await;
+
+        if write_result.is_ok() {
+            committed_replicas += 1;
+        } else if let Err(error) = write_result {
+            tracing::warn!(
+                "Replica write failed: node={} slot={} path={} error={}",
+                replica.node_id,
+                slot_id,
                 path,
-                version,
-                blob_id,
-                chunks_stored: body.len() / CHUNK_SIZE + 1,
-            };
-            let api_resp: ApiResponse<WriteResponse> = ApiResponse {
-                success: true,
-                data: Some(resp),
-                error: None,
-            };
-            (StatusCode::CREATED, axum::Json(api_resp)).into_response()
-        }
-        Err(e) => {
-            // Chunks become orphaned - will be cleaned up later
-            let resp = ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some(format!("2PC failed: {}", e)),
-            };
-            (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(resp)).into_response()
+                error
+            );
         }
     }
-}
 
-async fn store_chunks(
-    state: &Arc<ServerState>,
-    blob_id: &str,
-    data: &Bytes,
-) -> Result<Vec<ChunkRef>> {
-    let mut chunks = Vec::new();
-
-    for (index, chunk_data) in data.chunks(CHUNK_SIZE).enumerate() {
-        let chunk_id = compute_hash(chunk_data);
-        let len = chunk_data.len() as u64;
-
-        // Store chunk using new blob-specific API
-        state.chunk_store.put_chunk(blob_id, index, Bytes::copy_from_slice(chunk_data)).await?;
-
-        chunks.push(ChunkRef {
-            id: chunk_id,
-            len,
-        });
+    if committed_replicas < quorum {
+        return response_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "quorum not reached: required={}, committed={}",
+                quorum, committed_replicas
+            ),
+        );
     }
 
-    Ok(chunks)
+    state.idempotent_puts.write().await.insert(
+        cache_key,
+        PutCacheEntry {
+            generation,
+            etag: etag.clone(),
+            size_bytes: body.len() as u64,
+            committed_replicas,
+        },
+    );
+
+    let response = PutBlobResponse {
+        path,
+        slot_id,
+        generation,
+        etag,
+        size_bytes: body.len() as u64,
+        committed_replicas,
+        idempotent_replay: None,
+    };
+
+    (StatusCode::CREATED, Json(response)).into_response()
 }
 
-async fn perform_2pc(
+async fn replicate_meta_write(
     state: &Arc<ServerState>,
-    participants: Vec<String>,
+    replica: &NodeInfo,
     slot_id: u16,
-    meta: BlobMeta,
+    path: &str,
+    write_id: &str,
+    generation: i64,
+    parts: &[PartPayload],
+    meta: &BlobMeta,
+    head_sha256: &str,
 ) -> Result<()> {
-    let tx_id = state
-        .twopc_coordinator
-        .begin_transaction(participants.clone(), slot_id, meta.clone())
-        .await?;
+    for part in parts {
+        let part_url = internal_part_url(&replica.address, slot_id, &part.part.sha256, path)?;
 
-    // Phase 1: Prepare
-    for participant in &participants {
-        let tx = state
-            .twopc_coordinator
-            .get_transaction(&tx_id)
-            .await?
-            .ok_or_else(|| AmberError::TwoPhaseCommit("Transaction lost".to_string()))?;
+        let response = state
+            .client
+            .put(part_url)
+            .header("x-amberblob-write-id", write_id)
+            .header("x-amberblob-generation", generation.to_string())
+            .header("x-amberblob-part-offset", part.part.offset.to_string())
+            .header("x-amberblob-part-length", part.part.length.to_string())
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .body(part.data.clone())
+            .send()
+            .await
+            .map_err(|error| AmberError::Http(error.to_string()))?;
 
-        let vote = if participant.as_str() == state.node.node_id() {
-            // Local prepare
-            state.twopc_participant.prepare(&tx).await?
-        } else {
-            // Remote prepare - in production, this would be an RPC
-            // For now, assume remote nodes vote Yes
-            Vote::Yes
-        };
-
-        state
-            .twopc_coordinator
-            .record_vote(&tx_id, participant, vote)
-            .await?;
+        if !response.status().is_success() {
+            return Err(AmberError::Http(format!(
+                "replica part write failed: node={} status={} sha={} path={}",
+                replica.node_id,
+                response.status(),
+                part.part.sha256,
+                path
+            )));
+        }
     }
 
-    // Phase 2: Commit or Abort
-    let can_commit = state.twopc_coordinator.can_commit(&tx_id).await?;
+    let head_url = internal_head_url(&replica.address, slot_id, path)?;
+    let payload = InternalHeadApplyRequest {
+        head_kind: "meta".to_string(),
+        generation,
+        head_sha256: head_sha256.to_string(),
+        meta: Some(meta.clone()),
+        tombstone: None,
+    };
 
-    if can_commit {
-        state.twopc_coordinator.commit(&tx_id).await?;
+    let response = state
+        .client
+        .put(head_url)
+        .header("x-amberblob-write-id", write_id)
+        .header(header::CONTENT_TYPE, "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|error| AmberError::Http(error.to_string()))?;
 
-        // Apply locally if we're a participant
-        if participants.contains(&state.node.node_id().to_string()) {
-            if let Some(tx) = state.twopc_coordinator.get_transaction(&tx_id).await? {
-                // Store metadata locally
-                let slot = state.slot_manager.get_slot(slot_id).await?;
-                let store = MetadataStore::new(slot)?;
-                store.put_blob(&tx.blob_meta)?;
-            }
-        }
-    } else {
-        state.twopc_coordinator.abort(&tx_id).await?;
-        return Err(AmberError::TwoPhaseCommit("Transaction aborted".to_string()));
+    if !response.status().is_success() {
+        return Err(AmberError::Http(format!(
+            "replica head write failed: node={} status={} path={}",
+            replica.node_id,
+            response.status(),
+            path
+        )));
     }
 
     Ok(())
 }
 
-async fn delete_object(
+async fn v1_get_blob(
     State(state): State<Arc<ServerState>>,
-    Path(path): Path<String>,
-    Query(query): Query<GetObjectQuery>,  // Reuse query to get optional version
+    Path(raw_path): Path<String>,
 ) -> impl IntoResponse {
-    let slot_id = slot_for_key(&path, TOTAL_SLOTS);
+    let path = match normalize_blob_path(&raw_path) {
+        Ok(path) => path,
+        Err(error) => return response_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
 
-    if !state.slot_manager.has_slot(slot_id).await {
-        let resp = ApiResponse::<()> {
-            success: false,
-            data: None,
-            error: Some("Slot not local".to_string()),
-        };
-        return (StatusCode::BAD_REQUEST, axum::Json(resp)).into_response();
+    let slot_id = slot_for_key(&path, state.config.replication.total_slots);
+    let head = match ensure_head_available(&state, slot_id, &path).await {
+        Ok(Some(head)) => head,
+        Ok(None) => return response_error(StatusCode::NOT_FOUND, "object not found"),
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    if head.head_kind == HeadKind::Tombstone {
+        return response_error(StatusCode::GONE, "object deleted");
     }
 
-    match state.slot_manager.get_slot(slot_id).await {
-        Ok(slot) => {
-            let store = match MetadataStore::new(slot) {
-                Ok(s) => s,
-                Err(e) => {
-                    let resp = ApiResponse::<()> {
-                        success: false,
-                        data: None,
-                        error: Some(e.to_string()),
-                    };
-                    return (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(resp)).into_response();
-                }
-            };
+    let meta = match head.meta {
+        Some(meta) => meta,
+        None => return response_error(StatusCode::INTERNAL_SERVER_ERROR, "meta payload missing"),
+    };
 
-            // If no version specified, delete the latest version
-            let version = match query.version {
-                Some(v) => v,
-                None => {
-                    match store.get_max_version(&path) {
-                        Ok(v) if v > 0 => v,
-                        _ => {
-                            let resp = ApiResponse::<()> {
-                                success: false,
-                                data: None,
-                                error: Some("Blob not found".to_string()),
-                            };
-                            return (StatusCode::NOT_FOUND, axum::Json(resp)).into_response();
+    let replicas = match resolve_replica_nodes(&state, slot_id).await {
+        Ok(replicas) => replicas,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let local_node_id = state.node.node_id().to_string();
+    let peer_nodes: Vec<NodeInfo> = replicas
+        .into_iter()
+        .filter(|node| node.node_id != local_node_id)
+        .collect();
+
+    let mut body = Vec::with_capacity(meta.size_bytes as usize);
+    for part in &meta.parts {
+        let bytes = if state.chunk_store.part_exists(slot_id, &path, &part.sha256) {
+            match state
+                .chunk_store
+                .get_part(slot_id, &path, &part.sha256)
+                .await
+            {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to read local part. slot={} path={} sha={} error={}",
+                        slot_id,
+                        path,
+                        part.sha256,
+                        error
+                    );
+                    match fetch_part_from_peers_and_store(&state, &peer_nodes, slot_id, &path, part)
+                        .await
+                    {
+                        Ok(bytes) => bytes,
+                        Err(fetch_error) => {
+                            return response_error(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                fetch_error.to_string(),
+                            );
                         }
                     }
                 }
-            };
-
-            match store.delete_blob(&path, version) {
-                Ok(true) => {
-                    let resp = ApiResponse {
-                        success: true,
-                        data: Some(serde_json::json!({
-                            "deleted": true,
-                            "path": path,
-                            "version": version,
-                            "tombstoned": true
-                        })),
-                        error: None,
-                    };
-                    (StatusCode::OK, axum::Json(resp)).into_response()
-                }
-                Ok(false) => {
-                    let resp = ApiResponse::<()> {
-                        success: false,
-                        data: None,
-                        error: Some("Blob not found or already deleted".to_string()),
-                    };
-                    (StatusCode::NOT_FOUND, axum::Json(resp)).into_response()
-                }
-                Err(e) => {
-                    let resp = ApiResponse::<()> {
-                        success: false,
-                        data: None,
-                        error: Some(e.to_string()),
-                    };
-                    (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(resp)).into_response()
+            }
+        } else {
+            match fetch_part_from_peers_and_store(&state, &peer_nodes, slot_id, &path, part).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
                 }
             }
-        }
-        Err(e) => {
-            let resp = ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some(e.to_string()),
-            };
-            (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(resp)).into_response()
-        }
+        };
+
+        body.extend_from_slice(&bytes);
     }
+
+    let mut response = Response::new(Bytes::from(body).into());
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&meta.etag) {
+        response.headers_mut().insert(header::ETAG, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&meta.generation.to_string()) {
+        response
+            .headers_mut()
+            .insert("x-amberblob-generation", value);
+    }
+
+    response
 }
 
-async fn list_objects(
+async fn v1_head_blob(
+    State(state): State<Arc<ServerState>>,
+    Path(raw_path): Path<String>,
+) -> impl IntoResponse {
+    let path = match normalize_blob_path(&raw_path) {
+        Ok(path) => path,
+        Err(error) => return response_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+
+    let slot_id = slot_for_key(&path, state.config.replication.total_slots);
+    let head = match ensure_head_available(&state, slot_id, &path).await {
+        Ok(Some(head)) => head,
+        Ok(None) => return response_error(StatusCode::NOT_FOUND, "object not found"),
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    if head.head_kind == HeadKind::Tombstone {
+        return response_error(StatusCode::GONE, "object deleted");
+    }
+
+    let meta = match head.meta {
+        Some(meta) => meta,
+        None => return response_error(StatusCode::INTERNAL_SERVER_ERROR, "meta payload missing"),
+    };
+
+    let mut response = Response::new(axum::body::Body::empty());
+    *response.status_mut() = StatusCode::OK;
+    if let Ok(value) = HeaderValue::from_str(&meta.etag) {
+        response.headers_mut().insert(header::ETAG, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&meta.generation.to_string()) {
+        response
+            .headers_mut()
+            .insert("x-amberblob-generation", value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&meta.size_bytes.to_string()) {
+        response.headers_mut().insert(header::CONTENT_LENGTH, value);
+    }
+
+    response
+}
+
+async fn ensure_head_available(
+    state: &Arc<ServerState>,
+    slot_id: u16,
+    path: &str,
+) -> Result<Option<BlobHead>> {
+    let store = ensure_store(state, slot_id).await?;
+    if let Some(head) = store.get_current_head(path)? {
+        return Ok(Some(head));
+    }
+
+    let replicas = resolve_replica_nodes(state, slot_id).await?;
+    let local_node_id = state.node.node_id().to_string();
+
+    for node in replicas
+        .into_iter()
+        .filter(|node| node.node_id != local_node_id)
+    {
+        if let Some(remote_head) = fetch_remote_head(state, &node.address, slot_id, path).await? {
+            apply_remote_head_locally(state, slot_id, path, &remote_head).await?;
+            return Ok(Some(remote_head));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn fetch_part_from_peers_and_store(
+    state: &Arc<ServerState>,
+    peers: &[NodeInfo],
+    slot_id: u16,
+    path: &str,
+    part: &ChunkRef,
+) -> Result<Bytes> {
+    for peer in peers {
+        let part_url = internal_part_url(&peer.address, slot_id, &part.sha256, path)?;
+        let response = match state.client.get(part_url).send().await {
+            Ok(response) => response,
+            Err(_) => continue,
+        };
+
+        if !response.status().is_success() {
+            continue;
+        }
+
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+
+        let put_result = state
+            .chunk_store
+            .put_part(slot_id, path, &part.sha256, bytes.clone())
+            .await?;
+
+        let store = ensure_store(state, slot_id).await?;
+        let mut local_part = part.clone();
+        local_part.external_path = Some(put_result.part_path.to_string_lossy().to_string());
+        store.upsert_part_entry(path, &local_part)?;
+
+        return Ok(bytes);
+    }
+
+    Err(AmberError::ChunkNotFound(part.sha256.clone()))
+}
+
+async fn v1_delete_blob(
+    State(state): State<Arc<ServerState>>,
+    Path(raw_path): Path<String>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let path = match normalize_blob_path(&raw_path) {
+        Ok(path) => path,
+        Err(error) => return response_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+
+    let slot_id = slot_for_key(&path, state.config.replication.total_slots);
+    let write_id = headers
+        .get("x-amberblob-write-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("delete-{}", ulid::Ulid::new()));
+
+    let store = match ensure_store(&state, slot_id).await {
+        Ok(store) => store,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let generation = match store.next_generation(&path) {
+        Ok(generation) => generation,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let tombstone = TombstoneMeta {
+        path: path.clone(),
+        slot_id,
+        generation,
+        deleted_at: Utc::now(),
+        reason: "api-delete".to_string(),
+    };
+
+    let tombstone_bytes = match serde_json::to_vec(&tombstone) {
+        Ok(bytes) => bytes,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    let tombstone_sha = compute_hash(&tombstone_bytes);
+
+    let applied =
+        match store.insert_tombstone_with_payload(&tombstone, &tombstone_bytes, &tombstone_sha) {
+            Ok(applied) => applied,
+            Err(error) => {
+                return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+        };
+
+    if !applied {
+        return response_error(
+            StatusCode::CONFLICT,
+            "tombstone commit rejected by generation check",
+        );
+    }
+
+    let replicas = match resolve_replica_nodes(&state, slot_id).await {
+        Ok(replicas) => replicas,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let quorum = write_quorum(&state, replicas.len());
+    let local_node_id = state.node.node_id().to_string();
+    let mut committed_replicas = 1usize;
+
+    for replica in replicas.iter().filter(|node| node.node_id != local_node_id) {
+        let response = replicate_tombstone_write(
+            &state,
+            replica,
+            slot_id,
+            &path,
+            &write_id,
+            generation,
+            &tombstone,
+            &tombstone_sha,
+        )
+        .await;
+
+        if response.is_ok() {
+            committed_replicas += 1;
+        } else if let Err(error) = response {
+            tracing::warn!(
+                "Replica tombstone write failed: node={} slot={} path={} error={}",
+                replica.node_id,
+                slot_id,
+                path,
+                error
+            );
+        }
+    }
+
+    if committed_replicas < quorum {
+        return response_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "quorum not reached: required={}, committed={}",
+                quorum, committed_replicas
+            ),
+        );
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn replicate_tombstone_write(
+    state: &Arc<ServerState>,
+    replica: &NodeInfo,
+    slot_id: u16,
+    path: &str,
+    write_id: &str,
+    generation: i64,
+    tombstone: &TombstoneMeta,
+    head_sha256: &str,
+) -> Result<()> {
+    let head_url = internal_head_url(&replica.address, slot_id, path)?;
+    let payload = InternalHeadApplyRequest {
+        head_kind: "tombstone".to_string(),
+        generation,
+        head_sha256: head_sha256.to_string(),
+        meta: None,
+        tombstone: Some(tombstone.clone()),
+    };
+
+    let response = state
+        .client
+        .put(head_url)
+        .header("x-amberblob-write-id", write_id)
+        .header(header::CONTENT_TYPE, "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|error| AmberError::Http(error.to_string()))?;
+
+    if !response.status().is_success() {
+        return Err(AmberError::Http(format!(
+            "replica tombstone write failed: node={} status={} path={}",
+            replica.node_id,
+            response.status(),
+            path
+        )));
+    }
+
+    Ok(())
+}
+
+async fn v1_list_blobs(
     State(state): State<Arc<ServerState>>,
     Query(query): Query<ListQuery>,
 ) -> impl IntoResponse {
-    let mut all_objects = Vec::new();
-
-    // List from all local slots
     let slots = state.slot_manager.get_assigned_slots().await;
+    let mut heads = Vec::new();
+
     for slot_id in slots {
-        if let Ok(slot) = state.slot_manager.get_slot(slot_id).await {
-            if let Ok(store) = MetadataStore::new(slot) {
-                if let Ok(objects) = store.list_blobs(&query.prefix, query.limit, query.include_tombstoned) {
-                    all_objects.extend(objects);
+        let slot = match state.slot_manager.get_slot(slot_id).await {
+            Ok(slot) => slot,
+            Err(_) => continue,
+        };
+
+        let store = match MetadataStore::new(slot) {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::warn!("Failed to open metadata for slot {}: {}", slot_id, error);
+                continue;
+            }
+        };
+
+        let list = match store.list_heads(
+            &query.prefix,
+            query.limit.saturating_mul(2),
+            query.include_deleted,
+            query.cursor.as_deref(),
+        ) {
+            Ok(list) => list,
+            Err(error) => {
+                tracing::warn!("Failed to list slot {}: {}", slot_id, error);
+                continue;
+            }
+        };
+
+        heads.extend(list);
+    }
+
+    heads.sort_by(|a, b| a.path.cmp(&b.path));
+    heads.dedup_by(|a, b| a.path == b.path);
+
+    let mut items = Vec::new();
+    for head in heads.into_iter().take(query.limit) {
+        let (etag, size_bytes, deleted) = match head.head_kind {
+            HeadKind::Meta => {
+                let meta = head.meta.clone();
+                (
+                    meta.as_ref()
+                        .map(|item| item.etag.clone())
+                        .unwrap_or_default(),
+                    meta.as_ref().map(|item| item.size_bytes).unwrap_or(0),
+                    false,
+                )
+            }
+            HeadKind::Tombstone => (String::new(), 0, true),
+        };
+
+        items.push(ListItem {
+            path: head.path,
+            generation: head.generation,
+            etag,
+            size_bytes,
+            deleted,
+            updated_at: head.updated_at.to_rfc3339(),
+        });
+    }
+
+    let next_cursor = items.last().map(|item| item.path.clone());
+
+    (StatusCode::OK, Json(ListResponse { items, next_cursor })).into_response()
+}
+
+async fn internal_put_part(
+    State(state): State<Arc<ServerState>>,
+    Path((slot_id, sha256)): Path<(u16, String)>,
+    Query(query): Query<InternalPathQuery>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let path = match query.path {
+        Some(path) => match normalize_blob_path(&path) {
+            Ok(path) => path,
+            Err(error) => return response_error(StatusCode::BAD_REQUEST, error.to_string()),
+        },
+        None => return response_error(StatusCode::BAD_REQUEST, "path query is required"),
+    };
+
+    let store = match ensure_store(&state, slot_id).await {
+        Ok(store) => store,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    if compute_hash(&body) != sha256 {
+        return response_error(StatusCode::BAD_REQUEST, "part sha256 mismatch");
+    }
+
+    let put_result = match state
+        .chunk_store
+        .put_part(slot_id, &path, &sha256, body)
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let offset = headers
+        .get("x-amberblob-part-offset")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let length = headers
+        .get("x-amberblob-part-length")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_else(|| {
+            std::fs::metadata(&put_result.part_path)
+                .map(|meta| meta.len())
+                .unwrap_or(0)
+        });
+
+    let part = ChunkRef {
+        name: format!("part.{}", sha256),
+        sha256: sha256.clone(),
+        offset,
+        length,
+        external_path: Some(put_result.part_path.to_string_lossy().to_string()),
+        archive_url: None,
+    };
+
+    if let Err(error) = store.upsert_part_entry(&path, &part) {
+        return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+    }
+
+    (
+        StatusCode::OK,
+        Json(InternalPartPutResponse {
+            accepted: true,
+            reused: put_result.reused,
+            sha256,
+        }),
+    )
+        .into_response()
+}
+
+async fn internal_get_part(
+    State(state): State<Arc<ServerState>>,
+    Path((slot_id, sha256)): Path<(u16, String)>,
+    Query(query): Query<InternalPathQuery>,
+) -> impl IntoResponse {
+    let store = match ensure_store(&state, slot_id).await {
+        Ok(store) => store,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let part_bytes = if let Some(path) = query.path {
+        let normalized_path = match normalize_blob_path(&path) {
+            Ok(path) => path,
+            Err(error) => return response_error(StatusCode::BAD_REQUEST, error.to_string()),
+        };
+
+        match state
+            .chunk_store
+            .get_part(slot_id, &normalized_path, &sha256)
+            .await
+        {
+            Ok(bytes) => bytes,
+            Err(_) => return response_error(StatusCode::NOT_FOUND, "part not found for path"),
+        }
+    } else {
+        let external_path = match store.find_part_external_path(&sha256, None) {
+            Ok(path) => path,
+            Err(error) => {
+                return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+        };
+
+        let Some(external_path) = external_path else {
+            return response_error(StatusCode::NOT_FOUND, "part not found");
+        };
+
+        match tokio::fs::read(external_path).await {
+            Ok(bytes) => Bytes::from(bytes),
+            Err(error) => {
+                return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+        }
+    };
+
+    let mut response = Response::new(part_bytes.into());
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    response
+}
+
+async fn internal_put_head(
+    State(state): State<Arc<ServerState>>,
+    Path(slot_id): Path<u16>,
+    Query(query): Query<InternalPathQuery>,
+    Json(request): Json<InternalHeadApplyRequest>,
+) -> impl IntoResponse {
+    let store = match ensure_store(&state, slot_id).await {
+        Ok(store) => store,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let query_path = query.path.and_then(|path| normalize_blob_path(&path).ok());
+
+    match request.head_kind.as_str() {
+        "meta" => {
+            let mut meta = match request.meta {
+                Some(meta) => meta,
+                None => return response_error(StatusCode::BAD_REQUEST, "meta payload is required"),
+            };
+
+            if let Some(path) = query_path {
+                meta.path = path;
+            }
+
+            meta.slot_id = slot_id;
+            meta.generation = request.generation;
+            if meta.version == 0 {
+                meta.version = meta.generation;
+            }
+            meta.updated_at = Utc::now();
+
+            for part in &mut meta.parts {
+                if part.external_path.is_none() {
+                    if let Ok(part_path) =
+                        state
+                            .chunk_store
+                            .part_path(slot_id, &meta.path, &part.sha256)
+                    {
+                        part.external_path = Some(part_path.to_string_lossy().to_string());
+                    }
                 }
+                if let Err(error) = store.upsert_part_entry(&meta.path, part) {
+                    return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+                }
+            }
+
+            let inline_data = match serde_json::to_vec(&meta) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+                }
+            };
+            let head_sha = if request.head_sha256.is_empty() {
+                compute_hash(&inline_data)
+            } else {
+                request.head_sha256
+            };
+
+            if let Err(error) = store.upsert_meta_with_payload(&meta, &inline_data, &head_sha) {
+                return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+
+            (
+                StatusCode::OK,
+                Json(InternalHeadApplyResponse {
+                    applied: true,
+                    head_kind: "meta".to_string(),
+                    generation: meta.generation,
+                }),
+            )
+                .into_response()
+        }
+        "tombstone" => {
+            let mut tombstone = match request.tombstone {
+                Some(tombstone) => tombstone,
+                None => {
+                    return response_error(StatusCode::BAD_REQUEST, "tombstone payload is required");
+                }
+            };
+
+            if let Some(path) = query_path {
+                tombstone.path = path;
+            }
+
+            tombstone.slot_id = slot_id;
+            tombstone.generation = request.generation;
+            tombstone.deleted_at = Utc::now();
+
+            let inline_data = match serde_json::to_vec(&tombstone) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+                }
+            };
+            let head_sha = if request.head_sha256.is_empty() {
+                compute_hash(&inline_data)
+            } else {
+                request.head_sha256
+            };
+
+            if let Err(error) =
+                store.insert_tombstone_with_payload(&tombstone, &inline_data, &head_sha)
+            {
+                return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+
+            (
+                StatusCode::OK,
+                Json(InternalHeadApplyResponse {
+                    applied: true,
+                    head_kind: "tombstone".to_string(),
+                    generation: tombstone.generation,
+                }),
+            )
+                .into_response()
+        }
+        _ => response_error(
+            StatusCode::BAD_REQUEST,
+            "head_kind must be meta or tombstone",
+        ),
+    }
+}
+
+async fn internal_get_head(
+    State(state): State<Arc<ServerState>>,
+    Path(slot_id): Path<u16>,
+    Query(query): Query<InternalPathQuery>,
+) -> impl IntoResponse {
+    let Some(path) = query.path else {
+        return response_error(StatusCode::BAD_REQUEST, "path query is required");
+    };
+
+    let path = match normalize_blob_path(&path) {
+        Ok(path) => path,
+        Err(error) => return response_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+
+    let store = match ensure_store(&state, slot_id).await {
+        Ok(store) => store,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let head = match store.get_current_head(&path) {
+        Ok(head) => head,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let Some(head) = head else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(InternalHeadResponse {
+                found: false,
+                head_kind: None,
+                generation: None,
+                head_sha256: None,
+                meta: None,
+                tombstone: None,
+            }),
+        )
+            .into_response();
+    };
+
+    (
+        StatusCode::OK,
+        Json(InternalHeadResponse {
+            found: true,
+            head_kind: Some(match head.head_kind {
+                HeadKind::Meta => "meta".to_string(),
+                HeadKind::Tombstone => "tombstone".to_string(),
+            }),
+            generation: Some(head.generation),
+            head_sha256: Some(head.head_sha256),
+            meta: head.meta,
+            tombstone: head.tombstone,
+        }),
+    )
+        .into_response()
+}
+
+async fn fetch_remote_head(
+    state: &Arc<ServerState>,
+    address: &str,
+    slot_id: u16,
+    path: &str,
+) -> Result<Option<BlobHead>> {
+    let head_url = internal_head_url(address, slot_id, path)?;
+    let response = state
+        .client
+        .get(head_url)
+        .send()
+        .await
+        .map_err(|error| AmberError::Http(error.to_string()))?;
+
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+
+    if !response.status().is_success() {
+        return Err(AmberError::Http(format!(
+            "internal head fetch failed: status={} path={}",
+            response.status(),
+            path
+        )));
+    }
+
+    let payload: InternalHeadResponse = response
+        .json()
+        .await
+        .map_err(|error| AmberError::Http(error.to_string()))?;
+
+    if !payload.found {
+        return Ok(None);
+    }
+
+    let head_kind = match payload.head_kind.as_deref() {
+        Some("meta") => HeadKind::Meta,
+        Some("tombstone") => HeadKind::Tombstone,
+        _ => return Err(AmberError::Internal("invalid remote head kind".to_string())),
+    };
+
+    let generation = payload
+        .generation
+        .ok_or_else(|| AmberError::Internal("missing remote generation".to_string()))?;
+
+    let head_sha256 = payload
+        .head_sha256
+        .ok_or_else(|| AmberError::Internal("missing remote head_sha256".to_string()))?;
+
+    Ok(Some(BlobHead {
+        path: path.to_string(),
+        generation,
+        head_kind,
+        head_sha256,
+        updated_at: Utc::now(),
+        meta: payload.meta,
+        tombstone: payload.tombstone,
+    }))
+}
+
+async fn apply_remote_head_locally(
+    state: &Arc<ServerState>,
+    slot_id: u16,
+    path: &str,
+    head: &BlobHead,
+) -> Result<()> {
+    let store = ensure_store(state, slot_id).await?;
+
+    match head.head_kind {
+        HeadKind::Meta => {
+            let mut meta = head
+                .meta
+                .clone()
+                .ok_or_else(|| AmberError::Internal("missing meta payload".to_string()))?;
+            meta.path = path.to_string();
+            meta.slot_id = slot_id;
+            meta.generation = head.generation;
+            if meta.version == 0 {
+                meta.version = meta.generation;
+            }
+
+            for part in &mut meta.parts {
+                if part.external_path.is_none() {
+                    if let Ok(part_path) = state.chunk_store.part_path(slot_id, path, &part.sha256)
+                    {
+                        part.external_path = Some(part_path.to_string_lossy().to_string());
+                    }
+                }
+                store.upsert_part_entry(path, part)?;
+            }
+
+            let inline_data = serde_json::to_vec(&meta)?;
+            store.upsert_meta_with_payload(&meta, &inline_data, &head.head_sha256)?;
+        }
+        HeadKind::Tombstone => {
+            let mut tombstone = head
+                .tombstone
+                .clone()
+                .ok_or_else(|| AmberError::Internal("missing tombstone payload".to_string()))?;
+            tombstone.path = path.to_string();
+            tombstone.slot_id = slot_id;
+            tombstone.generation = head.generation;
+
+            let inline_data = serde_json::to_vec(&tombstone)?;
+            store.insert_tombstone_with_payload(&tombstone, &inline_data, &head.head_sha256)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn internal_head_url(address: &str, slot_id: u16, path: &str) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(&format!(
+        "http://{}/internal/v1/slots/{}/heads",
+        address, slot_id
+    ))
+    .map_err(|error| AmberError::Http(error.to_string()))?;
+
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("path", path);
+    }
+
+    Ok(url)
+}
+
+fn internal_part_url(
+    address: &str,
+    slot_id: u16,
+    sha256: &str,
+    path: &str,
+) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(&format!(
+        "http://{}/internal/v1/slots/{}/parts/{}",
+        address, slot_id, sha256
+    ))
+    .map_err(|error| AmberError::Http(error.to_string()))?;
+
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("path", path);
+    }
+
+    Ok(url)
+}
+
+async fn v1_internal_heal_buckets(
+    State(state): State<Arc<ServerState>>,
+    Path(slot_id): Path<u16>,
+    Query(query): Query<HealBucketsQuery>,
+) -> impl IntoResponse {
+    let store = match ensure_store(&state, slot_id).await {
+        Ok(store) => store,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let heads = match store.list_heads("", usize::MAX, true, None) {
+        Ok(heads) => heads,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let prefix_len = query.prefix_len.clamp(1, 8);
+    let mut buckets: BTreeMap<String, (u64, usize)> = BTreeMap::new();
+
+    for head in heads {
+        let hash = short_hash_hex(&head.path);
+        let prefix = hash.chars().take(prefix_len).collect::<String>();
+
+        let kind = match head.head_kind {
+            HeadKind::Meta => "meta",
+            HeadKind::Tombstone => "tombstone",
+        };
+
+        let digest_source = format!(
+            "{}|{}|{}|{}",
+            head.path, head.generation, head.head_sha256, kind
+        );
+
+        let entry = buckets.entry(prefix).or_insert((0, 0));
+        entry.0 ^= fold_hash_u64(&digest_source);
+        entry.1 += 1;
+    }
+
+    let response = HealBucketsResponse {
+        slot_id,
+        prefix_len,
+        buckets: buckets
+            .into_iter()
+            .map(|(prefix, (digest, objects))| HealBucket {
+                prefix,
+                digest: format!("{:016x}", digest),
+                objects,
+            })
+            .collect(),
+    };
+
+    (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn v1_internal_heal_heads(
+    State(state): State<Arc<ServerState>>,
+    Path(slot_id): Path<u16>,
+    Json(request): Json<HealHeadsRequest>,
+) -> impl IntoResponse {
+    let store = match ensure_store(&state, slot_id).await {
+        Ok(store) => store,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let heads = match store.list_heads("", usize::MAX, true, None) {
+        Ok(heads) => heads,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let filter_set: std::collections::HashSet<String> = request.prefixes.into_iter().collect();
+
+    let filtered = heads
+        .into_iter()
+        .filter(|head| {
+            let prefix = short_hash_hex(&head.path)
+                .chars()
+                .take(2)
+                .collect::<String>();
+            filter_set.contains(&prefix)
+        })
+        .map(|head| HealHeadItem {
+            path: head.path,
+            head_kind: match head.head_kind {
+                HeadKind::Meta => "meta".to_string(),
+                HeadKind::Tombstone => "tombstone".to_string(),
+            },
+            generation: head.generation,
+            head_sha256: head.head_sha256,
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(HealHeadsResponse {
+            slot_id,
+            heads: filtered,
+        }),
+    )
+        .into_response()
+}
+
+async fn v1_internal_heal_repair(
+    State(state): State<Arc<ServerState>>,
+    Path(slot_id): Path<u16>,
+    Json(request): Json<HealRepairRequest>,
+) -> impl IntoResponse {
+    let source_node_id = request.source_node_id.trim().to_string();
+    if source_node_id.is_empty() {
+        return response_error(StatusCode::BAD_REQUEST, "source_node_id is required");
+    }
+
+    let nodes = match current_nodes(&state).await {
+        Ok(nodes) => nodes,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let source = match nodes.iter().find(|node| node.node_id == source_node_id) {
+        Some(source) => source.clone(),
+        None => return response_error(StatusCode::NOT_FOUND, "source node not found"),
+    };
+
+    let mut repaired_objects = 0usize;
+    let mut skipped_objects = 0usize;
+    let mut errors = Vec::new();
+
+    for raw_path in request.blob_paths {
+        let path = match normalize_blob_path(&raw_path) {
+            Ok(path) => path,
+            Err(error) => {
+                skipped_objects += 1;
+                errors.push(format!("{}: {}", raw_path, error));
+                continue;
+            }
+        };
+
+        if request.dry_run {
+            skipped_objects += 1;
+            continue;
+        }
+
+        let remote_head = match fetch_remote_head(&state, &source.address, slot_id, &path).await {
+            Ok(Some(head)) => head,
+            Ok(None) => {
+                skipped_objects += 1;
+                errors.push(format!("{}: source has no head", path));
+                continue;
+            }
+            Err(error) => {
+                skipped_objects += 1;
+                errors.push(format!("{}: {}", path, error));
+                continue;
+            }
+        };
+
+        match repair_path_from_head(&state, &source, slot_id, &path, &remote_head).await {
+            Ok(_) => repaired_objects += 1,
+            Err(error) => {
+                skipped_objects += 1;
+                errors.push(format!("{}: {}", path, error));
             }
         }
     }
 
-    // Convert to response format
-    let responses: Vec<ObjectResponse> = all_objects
-        .into_iter()
-        .map(|meta| ObjectResponse {
-            path: meta.path,
-            version: meta.version,
-            blob_id: meta.blob_id,
-            size: meta.size,
-            chunks: meta.chunks,
-            created_at: meta.created_at.to_rfc3339(),
-            tombstoned_at: meta.tombstoned_at.map(|t| t.to_rfc3339()),
-        })
-        .collect();
-
-    let resp = ApiResponse {
-        success: true,
-        data: Some(responses),
-        error: None,
-    };
-
-    (StatusCode::OK, axum::Json(resp))
+    (
+        StatusCode::OK,
+        Json(HealRepairResponse {
+            slot_id,
+            repaired_objects,
+            skipped_objects,
+            errors,
+        }),
+    )
+        .into_response()
 }
 
-async fn get_slot_info(
-    State(state): State<Arc<ServerState>>,
-    Path(slot_id): Path<u16>,
-) -> impl IntoResponse {
-    match state.registry.get_slot(slot_id).await {
-        Ok(Some(info)) => {
-            let resp: ApiResponse<SlotInfo> = ApiResponse {
-                success: true,
-                data: Some(info),
-                error: None,
-            };
-            (StatusCode::OK, axum::Json(resp)).into_response()
-        }
-        Ok(None) => {
-            let resp = ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some("Slot not found".to_string()),
-            };
-            (StatusCode::NOT_FOUND, axum::Json(resp)).into_response()
-        }
-        Err(e) => {
-            let resp = ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some(e.to_string()),
-            };
-            (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(resp)).into_response()
+async fn repair_path_from_head(
+    state: &Arc<ServerState>,
+    source: &NodeInfo,
+    slot_id: u16,
+    path: &str,
+    remote_head: &BlobHead,
+) -> Result<()> {
+    if let HeadKind::Meta = remote_head.head_kind {
+        let meta = remote_head
+            .meta
+            .clone()
+            .ok_or_else(|| AmberError::Internal("missing meta payload".to_string()))?;
+
+        for part in &meta.parts {
+            if state.chunk_store.part_exists(slot_id, path, &part.sha256) {
+                continue;
+            }
+
+            let part_url = internal_part_url(&source.address, slot_id, &part.sha256, path)?;
+            let response = state
+                .client
+                .get(part_url)
+                .send()
+                .await
+                .map_err(|error| AmberError::Http(error.to_string()))?;
+
+            if !response.status().is_success() {
+                return Err(AmberError::Http(format!(
+                    "failed to fetch part {} from source {}: {}",
+                    part.sha256,
+                    source.node_id,
+                    response.status()
+                )));
+            }
+
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|error| AmberError::Http(error.to_string()))?;
+
+            let put_result = state
+                .chunk_store
+                .put_part(slot_id, path, &part.sha256, bytes)
+                .await?;
+
+            let store = ensure_store(state, slot_id).await?;
+            let mut local_part = part.clone();
+            local_part.external_path = Some(put_result.part_path.to_string_lossy().to_string());
+            store.upsert_part_entry(path, &local_part)?;
         }
     }
+
+    apply_remote_head_locally(state, slot_id, path, remote_head).await
 }
 
-async fn list_nodes(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
-    match state.registry.get_nodes().await {
-        Ok(nodes) => {
-            let resp: ApiResponse<Vec<NodeInfo>> = ApiResponse {
-                success: true,
-                data: Some(nodes),
-                error: None,
-            };
-            (StatusCode::OK, axum::Json(resp)).into_response()
-        }
-        Err(e) => {
-            let resp = ApiResponse::<()> {
-                success: false,
-                data: None,
-                error: Some(e.to_string()),
-            };
-            (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(resp)).into_response()
-        }
-    }
+fn fold_hash_u64(value: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn short_hash_hex(value: &str) -> String {
+    format!("{:016x}", fold_hash_u64(value))
 }

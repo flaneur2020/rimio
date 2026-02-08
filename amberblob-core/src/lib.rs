@@ -1,10 +1,4 @@
 //! AmberBlob Core - Core library for lightweight object storage for edge cloud nodes
-//!
-//! A fixed-topology, leaderless object storage system using:
-//! - 2048 fixed slots per group
-//! - 2PC for consistency
-//! - SHA256 content-addressed chunks
-//! - SQLite for local metadata
 
 pub mod error;
 pub mod node;
@@ -15,12 +9,19 @@ pub mod two_phase_commit;
 
 pub use error::{AmberError, Result};
 pub use node::{Node, NodeInfo, NodeStatus};
-pub use registry::{Registry, DynRegistry, SlotEvent};
 pub use registry::etcd::EtcdRegistry;
 pub use registry::redis::RedisRegistry;
-pub use slot_manager::{SlotManager, Slot, SlotInfo, SlotHealth, ReplicaStatus, slot_for_key, TOTAL_SLOTS, CHUNK_SIZE};
-pub use storage::{ChunkStore, MetadataStore, BlobMeta, ChunkRef, BlobChunkArchive, compute_hash, verify_hash};
-// Legacy exports for backward compatibility
+pub use registry::{DynRegistry, Registry, SlotEvent};
+pub use slot_manager::{
+    CHUNK_SIZE, ReplicaStatus, Slot, SlotHealth, SlotInfo, SlotManager, TOTAL_SLOTS, slot_for_key,
+};
+pub use storage::{
+    BlobHead, BlobMeta, ChunkRef, ChunkStore, HeadKind, MetadataStore, PutPartResult,
+    TombstoneMeta, compute_hash, verify_hash,
+};
+
 pub use storage::BlobMeta as ObjectMeta;
 pub use storage::ChunkRef as ChunkInfo;
-pub use two_phase_commit::{TwoPhaseCommit, TwoPhaseParticipant, Transaction, TransactionState, Vote};
+pub use two_phase_commit::{
+    Transaction, TransactionState, TwoPhaseCommit, TwoPhaseParticipant, Vote,
+};

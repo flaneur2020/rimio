@@ -1,12 +1,18 @@
 use crate::error::{AmberError, Result};
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
-/// ChunkStore handles blob-specific chunk storage
-/// Following RFC: chunks are stored in blobs/{blob_id}/chunks/{chunk_id}
+#[derive(Debug, Clone)]
+pub struct PutPartResult {
+    pub part_path: PathBuf,
+    pub reused: bool,
+}
+
+/// ChunkStore stores external blob data as `part.{sha256}` files:
+/// `slots/{slot_id}/blobs/{blob_path}/part.{sha256}`.
 pub struct ChunkStore {
     base_path: PathBuf,
 }
@@ -17,202 +23,126 @@ impl ChunkStore {
         Ok(Self { base_path })
     }
 
-    /// Get the base path for the store
-    pub fn base_path(&self) -> &PathBuf {
+    pub fn base_path(&self) -> &Path {
         &self.base_path
     }
 
-    /// Store a chunk for a specific blob
-    /// Returns the chunk ID (SHA256 hash)
-    pub async fn put_chunk(
+    pub async fn put_part(
         &self,
-        blob_id: &str,
-        chunk_index: usize,
+        slot_id: u16,
+        blob_path: &str,
+        sha256: &str,
         data: Bytes,
-    ) -> Result<String> {
-        let chunk_id = compute_hash(&data);
-        let chunk_path = self.chunk_path(blob_id, &chunk_id);
+    ) -> Result<PutPartResult> {
+        verify_hash(&data, sha256)?;
 
-        // Create blob chunks directory if needed
-        let blob_chunks_dir = self.blob_chunks_dir(blob_id);
-        fs::create_dir_all(&blob_chunks_dir).await?;
-
-        // Check if chunk already exists
-        if chunk_path.exists() {
-            return Ok(chunk_id);
+        let part_path = self.part_path(slot_id, blob_path, sha256)?;
+        if let Some(parent) = part_path.parent() {
+            fs::create_dir_all(parent).await?;
         }
 
-        // Write to temporary file first, then rename for atomicity
-        let temp_path = chunk_path.with_extension("tmp");
-        let mut file = fs::File::create(&temp_path).await?;
+        if part_path.exists() {
+            return Ok(PutPartResult {
+                part_path,
+                reused: true,
+            });
+        }
+
+        let tmp_path = part_path.with_extension(format!("{}.tmp", ulid::Ulid::new()));
+        let mut file = fs::File::create(&tmp_path).await?;
         file.write_all(&data).await?;
         file.sync_all().await?;
         drop(file);
 
-        fs::rename(&temp_path, &chunk_path).await?;
+        fs::rename(&tmp_path, &part_path).await?;
 
-        tracing::debug!(
-            "Stored chunk {} for blob {} (index {})",
-            chunk_id,
-            blob_id,
-            chunk_index
-        );
-        Ok(chunk_id)
+        Ok(PutPartResult {
+            part_path,
+            reused: false,
+        })
     }
 
-    /// Retrieve a chunk by blob_id and chunk_id
-    pub async fn get_chunk(&self, blob_id: &str, chunk_id: &str) -> Result<Bytes> {
-        let chunk_path = self.chunk_path(blob_id, chunk_id);
-
-        if !chunk_path.exists() {
-            return Err(AmberError::ChunkNotFound(chunk_id.to_string()));
+    pub async fn get_part(&self, slot_id: u16, blob_path: &str, sha256: &str) -> Result<Bytes> {
+        let part_path = self.part_path(slot_id, blob_path, sha256)?;
+        if !part_path.exists() {
+            return Err(AmberError::ChunkNotFound(sha256.to_string()));
         }
 
-        let data = fs::read(&chunk_path).await?;
-        Ok(Bytes::from(data))
+        let bytes = fs::read(part_path).await?;
+        Ok(Bytes::from(bytes))
     }
 
-    /// Check if a chunk exists
-    pub fn chunk_exists(&self, blob_id: &str, chunk_id: &str) -> bool {
-        self.chunk_path(blob_id, chunk_id).exists()
+    pub fn part_exists(&self, slot_id: u16, blob_path: &str, sha256: &str) -> bool {
+        self.part_path(slot_id, blob_path, sha256)
+            .map(|path| path.exists())
+            .unwrap_or(false)
     }
 
-    /// Delete a specific chunk
-    pub async fn delete_chunk(&self, blob_id: &str, chunk_id: &str) -> Result<()> {
-        let chunk_path = self.chunk_path(blob_id, chunk_id);
-        if chunk_path.exists() {
-            fs::remove_file(&chunk_path).await?;
+    pub async fn delete_blob_parts(&self, slot_id: u16, blob_path: &str) -> Result<()> {
+        let blob_dir = self.blob_dir(slot_id, blob_path)?;
+        if blob_dir.exists() {
+            fs::remove_dir_all(blob_dir).await?;
         }
         Ok(())
     }
 
-    /// Delete all chunks for a blob
-    pub async fn delete_blob_chunks(&self, blob_id: &str) -> Result<()> {
-        let blob_chunks_dir = self.blob_chunks_dir(blob_id);
-        if blob_chunks_dir.exists() {
-            fs::remove_dir_all(&blob_chunks_dir).await?;
-        }
-        Ok(())
+    pub fn part_path(&self, slot_id: u16, blob_path: &str, sha256: &str) -> Result<PathBuf> {
+        let file_name = format!("part.{}", sha256);
+        Ok(self.blob_dir(slot_id, blob_path)?.join(file_name))
     }
 
-    /// Get the path to a chunk
-    fn chunk_path(&self, blob_id: &str, chunk_id: &str) -> PathBuf {
-        self.blob_chunks_dir(blob_id).join(chunk_id)
-    }
-
-    /// Get the directory for a blob's chunks
-    fn blob_chunks_dir(&self, blob_id: &str) -> PathBuf {
-        self.base_path.join("blobs").join(blob_id).join("chunks")
-    }
-
-    /// List all chunks for a blob
-    pub async fn list_blob_chunks(&self, blob_id: &str) -> Result<Vec<String>> {
-        let blob_chunks_dir = self.blob_chunks_dir(blob_id);
-
-        if !blob_chunks_dir.exists() {
-            return Ok(Vec::new());
+    pub fn blob_dir(&self, slot_id: u16, blob_path: &str) -> Result<PathBuf> {
+        let mut path = self
+            .base_path
+            .join("slots")
+            .join(slot_id.to_string())
+            .join("blobs");
+        for component in normalize_blob_path(blob_path)?.split('/') {
+            path.push(component);
         }
-
-        let mut chunks = Vec::new();
-        let mut entries = fs::read_dir(&blob_chunks_dir).await?;
-
-        while let Some(entry) = entries.next_entry().await? {
-            if entry.file_type().await?.is_file() {
-                if let Some(name) = entry.file_name().to_str() {
-                    chunks.push(name.to_string());
-                }
-            }
-        }
-
-        Ok(chunks)
+        Ok(path)
     }
 }
 
-/// Compute SHA256 hash of data
+fn normalize_blob_path(input: &str) -> Result<String> {
+    let trimmed = input.trim_matches('/');
+    if trimmed.is_empty() {
+        return Err(AmberError::InvalidRequest(
+            "blob path cannot be empty".to_string(),
+        ));
+    }
+
+    let mut parts = Vec::new();
+    for part in trimmed.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return Err(AmberError::InvalidRequest(format!(
+                "invalid blob path component: {}",
+                part
+            )));
+        }
+        parts.push(part);
+    }
+
+    Ok(parts.join("/"))
+}
+
+/// Compute SHA256 hash of data.
 pub fn compute_hash(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
 }
 
-/// Verify that data matches the expected hash
+/// Verify data hash.
 pub fn verify_hash(data: &[u8], expected_hash: &str) -> Result<()> {
-    let actual_hash = compute_hash(data);
-    if actual_hash != expected_hash {
+    let actual = compute_hash(data);
+    if actual != expected_hash {
         return Err(AmberError::HashMismatch {
             expected: expected_hash.to_string(),
-            actual: actual_hash,
+            actual,
         });
     }
     Ok(())
-}
-
-/// Legacy ChunkStore for backward compatibility
-/// This is the old content-addressed storage that used a shared chunks directory
-pub struct LegacyChunkStore {
-    base_path: PathBuf,
-}
-
-impl LegacyChunkStore {
-    pub fn new(base_path: PathBuf) -> Result<Self> {
-        std::fs::create_dir_all(&base_path)?;
-        Ok(Self { base_path })
-    }
-
-    /// Store a chunk and return its SHA256 hash
-    pub async fn put(&self, data: Bytes) -> Result<String> {
-        let hash = compute_hash(&data);
-        let chunk_path = self.chunk_path(&hash);
-
-        // Check if chunk already exists (content-addressed)
-        if chunk_path.exists() {
-            return Ok(hash);
-        }
-
-        // Write to temporary file first, then rename for atomicity
-        let temp_path = chunk_path.with_extension("tmp");
-        let mut file = fs::File::create(&temp_path).await?;
-        file.write_all(&data).await?;
-        file.sync_all().await?;
-        drop(file);
-
-        fs::rename(&temp_path, &chunk_path).await?;
-
-        tracing::debug!("Stored chunk with hash {}", hash);
-        Ok(hash)
-    }
-
-    /// Retrieve a chunk by its hash
-    pub async fn get(&self, hash: &str) -> Result<Bytes> {
-        let chunk_path = self.chunk_path(hash);
-
-        if !chunk_path.exists() {
-            return Err(AmberError::ChunkNotFound(hash.to_string()));
-        }
-
-        let data = fs::read(&chunk_path).await?;
-        Ok(Bytes::from(data))
-    }
-
-    /// Check if a chunk exists
-    pub fn exists(&self, hash: &str) -> bool {
-        self.chunk_path(hash).exists()
-    }
-
-    /// Delete a chunk
-    pub async fn delete(&self, hash: &str) -> Result<()> {
-        let chunk_path = self.chunk_path(hash);
-        if chunk_path.exists() {
-            fs::remove_file(&chunk_path).await?;
-        }
-        Ok(())
-    }
-
-    fn chunk_path(&self, hash: &str) -> PathBuf {
-        // Use first 2 chars as subdirectory to avoid too many files in one dir
-        let prefix = &hash[..2.min(hash.len())];
-        self.base_path.join("chunks").join(prefix).join(hash)
-    }
 }
 
 #[cfg(test)]
@@ -220,39 +150,33 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_chunk_store() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let store = ChunkStore::new(temp_dir.path().to_path_buf()).unwrap();
+    async fn test_part_store_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ChunkStore::new(dir.path().to_path_buf()).unwrap();
 
-        let blob_id = "test_blob_123";
-        let data = Bytes::from("test data content");
-        let chunk_id = compute_hash(&data);
+        let slot_id = 7;
+        let blob_path = "a/b/c.txt";
+        let body = Bytes::from("hello-world");
+        let sha = compute_hash(&body);
 
-        // Store chunk
-        let returned_id = store.put_chunk(blob_id, 0, data.clone()).await.unwrap();
-        assert_eq!(returned_id, chunk_id);
+        let put = store
+            .put_part(slot_id, blob_path, &sha, body.clone())
+            .await
+            .unwrap();
+        assert!(!put.reused);
+        assert!(put.part_path.exists());
 
-        // Retrieve chunk
-        let retrieved = store.get_chunk(blob_id, &chunk_id).await.unwrap();
-        assert_eq!(retrieved, data);
+        let read = store.get_part(slot_id, blob_path, &sha).await.unwrap();
+        assert_eq!(read, body);
 
-        // Check existence
-        assert!(store.chunk_exists(blob_id, &chunk_id));
+        let reused = store
+            .put_part(slot_id, blob_path, &sha, body.clone())
+            .await
+            .unwrap();
+        assert!(reused.reused);
 
-        // List chunks
-        let chunks = store.list_blob_chunks(blob_id).await.unwrap();
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0], chunk_id);
-
-        // Delete chunk
-        store.delete_chunk(blob_id, &chunk_id).await.unwrap();
-        assert!(!store.chunk_exists(blob_id, &chunk_id));
-    }
-
-    #[test]
-    fn test_compute_hash() {
-        let data = b"hello world";
-        let hash = compute_hash(data);
-        assert_eq!(hash.len(), 64); // SHA256 hex string is 64 chars
+        assert!(store.part_exists(slot_id, blob_path, &sha));
+        store.delete_blob_parts(slot_id, blob_path).await.unwrap();
+        assert!(!store.part_exists(slot_id, blob_path, &sha));
     }
 }
