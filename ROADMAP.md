@@ -1,44 +1,56 @@
 # Amberio Roadmap
 
-## Project Vision
+## Positioning & Goals
 
-A lightweight, fixed-topology blob storage system for edge cloud nodes, featuring strong consistency, multi-version support, and tiered storage with S3 archival.
+Amberio is positioned as a practical object storage system for small edge
+clusters with fixed or slowly changing topology.
+
+Near-term goals:
+
+- Deliver predictable routing and stable write semantics for edge deployments
+- Provide reliable cluster coordination and anti-entropy recovery
+- Keep operations simple with local metadata + filesystem-backed data
+
+Long-term goals:
+
+- Add policy-driven tiered storage and S3 archival
+- Improve production operability (metrics, logging, migration tooling)
+- Improve throughput and latency without sacrificing consistency guarantees
 
 ---
 
 ## Milestones
 
-### ✅ Phase 1: Core Storage (Completed)
+### ✅ Phase 1: Foundation (Completed)
 
-RFC-compliant storage layer with versioning and soft delete.
+Storage and API baseline for edge object storage.
 
-- [x] Database schema (`blobs` table, `blob_chunk_archives` table)
-- [x] Per-blob chunk storage (`blobs/{blob_id}/chunks/`)
-- [x] Multi-version support with (path, version) → blob_id mapping
-- [x] Tombstone-based soft delete
-- [x] HTTP API with versioning support
+- [x] SQLite metadata schema (`file_entries`)
+- [x] Slot-based external part storage on filesystem
+- [x] Generation-based object heads and tombstones
+- [x] External API under `/api/v1/blobs/*`
 
 ### 🔄 Phase 2: Cluster Coordination (In Progress)
 
-Distributed consensus and node management.
+Distributed write coordination and node lifecycle management.
 
-- [ ] Complete 2PC integration for distributed writes
+- [ ] Harden quorum-based distributed write behavior
 - [ ] Slot assignment and rebalancing
 - [ ] Node join/leave handling
 - [ ] Health checking and failure detection
 
 ### 📋 Phase 3: Anti-Entropy
 
-Automatic replica synchronization.
+Background synchronization for replica convergence.
 
-- [ ] Blob comparison by blob_id (ULID ordering)
+- [ ] Head/generation comparison for drift detection
 - [ ] Background sync for missing blobs
 - [ ] Tombstone propagation across replicas
-- [ ] Orphan chunk cleanup
+- [ ] Orphan part cleanup
 
 ### 📋 Phase 4: Tiered Storage
 
-Hot/warm/cold storage with S3 archival.
+Hot/warm/cold data lifecycle with S3 archival.
 
 - [ ] Chunk-level archiving to S3
 - [ ] On-demand restoration from archive
@@ -47,7 +59,7 @@ Hot/warm/cold storage with S3 archival.
 
 ### 📋 Phase 5: Production Readiness
 
-Operational features for production deployment.
+Operational capabilities for production deployment.
 
 - [ ] Metrics and monitoring (Prometheus)
 - [ ] Structured logging
@@ -57,7 +69,7 @@ Operational features for production deployment.
 
 ### 📋 Phase 6: Performance Optimization
 
-Scalability and efficiency improvements.
+Performance and efficiency improvements.
 
 - [ ] Chunk compression
 - [ ] Read caching layer
@@ -71,13 +83,14 @@ Scalability and efficiency improvements.
 ### Current API
 
 ```
-PUT   /objects/{path}?version=N        # Create/update blob
-GET   /objects/{path}?version=N        # Read blob (latest if no version)
-DELETE /objects/{path}?version=N       # Soft delete blob
-GET   /objects?prefix=P&limit=N        # List blobs
-GET   /health                          # Health check
-GET   /nodes                           # List cluster nodes
-GET   /slots/{id}                      # Get slot info
+PUT    /api/v1/blobs/{path}                  # Create/update blob
+GET    /api/v1/blobs/{path}                  # Read blob
+HEAD   /api/v1/blobs/{path}                  # Read metadata
+DELETE /api/v1/blobs/{path}                  # Delete blob
+GET    /api/v1/blobs?prefix=<p>&limit=<n>    # List blobs
+GET    /api/v1/healthz                       # Health check
+GET    /api/v1/nodes                         # List cluster nodes
+GET    /api/v1/slots/resolve?path=<blob_path> # Resolve slot
 ```
 
 ### Storage Layout
@@ -88,16 +101,16 @@ GET   /slots/{id}                      # Get slot info
     └── <slot_id>/
         ├── meta.sqlite3
         └── blobs/
-            └── <blob_id>/
-                └── chunks/
-                    └── <chunk_id>
+            └── <blob_path>/
+                └── g.<generation>/
+                    └── part.<index:08>.<sha256>
 ```
 
 ---
 
 ## Contributing
 
-See individual issues for Phase 2-6 tasks. Priority order:
-1. 2PC completion
+See individual issues for Phase 2-6 tasks. Suggested priority order:
+1. Cluster coordination hardening
 2. Anti-entropy
-3. S3 archival
+3. S3 archival and restore path

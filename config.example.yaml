@@ -1,3 +1,6 @@
+# Example configuration for Amberio.
+# Optimized for small edge clusters with stable topology.
+
 node:
   node_id: "edge-node-001"
   group_id: "edge-cluster-001"
@@ -6,20 +9,24 @@ node:
     - path: /data/disk1
     - path: /data/disk2
 
-# Choose registry backend: etcd or redis
+# Registry backend: choose one backend and configure it below.
 registry:
-  backend: etcd  # or: redis
-  etcd:
-    endpoints:
-      - "http://localhost:2379"
-  # redis:
-  #   url: "redis://localhost:6379"
-  #   pool_size: 10
+  backend: redis  # options: etcd | redis
+  # etcd:
+  #   endpoints:
+  #     - "http://localhost:2379"
+  redis:
+    url: "redis://localhost:6379"
+    pool_size: 10
 
+# Replication and routing settings.
 replication:
+  # Minimum write acknowledgements required before success is returned.
   min_write_replicas: 3
+  # Fixed slot count for deterministic routing. Keep stable after bootstrap.
   total_slots: 2048
 
+# Optional archive/cold tier backend.
 archive:
   archive_type: s3
   s3:

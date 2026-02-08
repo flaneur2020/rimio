@@ -1,122 +1,60 @@
 # Amberio
 
-Lightweight object storage for edge cloud nodes.
+Amberio is a lightweight write-through cache for cloud object storage services, designed as a practical storage layer for small on-premise clusters in edge environments where cluster size is limited, topology is relatively stable, and operational simplicity matters more than hyperscale features.
 
-## Overview
+Amberio features:
 
-Amberio is a fixed-topology, leaderless object storage system designed for small-scale edge clusters (3-10 machines). It trades scalability for simplicity.
-
-## Key Features
-
-- **Fixed 2048 slots** per group - no dynamic scaling
-- **Leaderless architecture** - any node can handle requests
-- **2PC for consistency** - two-phase commit for metadata updates
-- **Content-addressed storage** - SHA256 hash for chunk deduplication
-- **Local SQLite metadata** - per-slot metadata management
-- **etcd for coordination** - routing table and health status
-
-## Architecture
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Node 1    │◄───►│   Node 2    │◄───►│   Node 3    │
-│  (Slots     │     │  (Slots     │     │  (Slots     │
-│   0-682)    │     │   683-1365) │     │   1366-2047)│
-└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
-       │                   │                   │
-       └───────────────────┼───────────────────┘
-                           │
-                    ┌──────┴──────┐
-                    │    etcd     │
-                    │ (routing &  │
-                    │   health)   │
-                    └─────────────┘
-```
+- Stay focused on small-to-medium edge deployments instead of internet-scale multi-tenant object storage
+- Provide predictable object routing through pre-sharded `slot`s (fixed 2048 slots)
+- Minio-style Quorum based writes
+- Use local, easy-to-operate metadata (`SQLite`) and filesystem-backed data
+- Expose clear internal repair/sync APIs for resilience and recovery
+- TLA+ proof of correctness
+- S3 Compatibility (in development)
 
 ## Quick Start
 
-### 1. Build
+1. Start Redis (for example, `redis://127.0.0.1:6379`)
+2. Build the binary:
 
 ```bash
-cargo build --release
+cargo build --release -p amberio-server --bin amberio
 ```
 
-### 2. Configure
-
-Copy the example config and edit:
+3. Prepare config:
 
 ```bash
 cp config.example.yaml config.yaml
-# Edit config.yaml with your settings
 ```
 
-### 3. Initialize
-
-```bash
-./target/release/amberio init --config config.yaml
-```
-
-### 4. Run
+4. Start the server:
 
 ```bash
 ./target/release/amberio server --config config.yaml
 ```
 
-## API Endpoints
+## External API (Simplified)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Node health check |
-| PUT | `/objects/{path}` | Upload object |
-| GET | `/objects/{path}` | Download object |
-| DELETE | `/objects/{path}` | Delete object |
-| GET | `/objects` | List objects |
-| GET | `/slots/{id}` | Get slot info |
-| GET | `/nodes` | List nodes |
+- `GET /api/v1/healthz`
+- `GET /api/v1/nodes`
+- `GET /api/v1/slots/resolve?path=<blob_path>`
+- `PUT /api/v1/blobs/{path}`
+- `GET /api/v1/blobs/{path}`
+- `HEAD /api/v1/blobs/{path}`
+- `DELETE /api/v1/blobs/{path}`
+- `GET /api/v1/blobs?prefix=<p>&limit=<n>`
 
-## Example Usage
+Common request/response headers:
+- `x-amberio-write-id`
+- `x-amberio-generation`
+
+## Integration Tests
 
 ```bash
-# Upload a file
-curl -X PUT http://localhost:8080/objects/myfile.txt -d "Hello, World!"
-
-# Download a file
-curl http://localhost:8080/objects/myfile.txt
-
-# List objects
-curl http://localhost:8080/objects
-
-# Check health
-curl http://localhost:8080/health
+python3 integration/run_all.py \
+  --binary target/release/amberio \
+  --redis-url redis://127.0.0.1:6379
 ```
-
-## Configuration
-
-```yaml
-node:
-  node_id: "edge-node-001"
-  group_id: "edge-cluster-001"
-  bind_addr: "0.0.0.0:8080"
-  disks:
-    - path: /data/disk1
-
-etcd:
-  endpoints:
-    - "http://localhost:2379"
-
-replication:
-  min_write_replicas: 3
-  total_slots: 2048
-```
-
-## Design Tradeoffs
-
-| Aspect | Choice | Reason |
-|--------|--------|--------|
-| Scalability | Fixed 2048 slots | Edge scale fixed, simplify consistency |
-| Architecture | No leader, 2PC | Eliminate single point, high availability |
-| Consistency | 2PC metadata commit | Data and metadata strong consistency |
-| Recovery | Anti-entropy | No central coordination needed |
 
 ## License
 
