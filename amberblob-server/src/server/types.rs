@@ -1,5 +1,4 @@
 use amberblob_core::{BlobMeta, TombstoneMeta};
-use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -178,12 +177,6 @@ pub(crate) struct HealRepairResponse {
     pub(crate) repaired_objects: usize,
     pub(crate) skipped_objects: usize,
     pub(crate) errors: Vec<String>,
-}
-
-#[derive(Clone)]
-pub(crate) struct PartPayload {
-    pub(crate) part: amberblob_core::PartRef,
-    pub(crate) data: Bytes,
 }
 
 fn default_limit() -> usize {

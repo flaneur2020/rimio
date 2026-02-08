@@ -3,6 +3,7 @@
 pub mod coordinator;
 pub mod error;
 pub mod node;
+pub mod operations;
 pub mod registry;
 pub mod slot_manager;
 pub mod storage;
@@ -10,6 +11,9 @@ pub mod storage;
 pub use coordinator::{Coordinator, ReplicatedPart};
 pub use error::{AmberError, Result};
 pub use node::{Node, NodeInfo, NodeStatus};
+pub use operations::{
+    PutBlobOperation, PutBlobOperationOutcome, PutBlobOperationRequest, PutBlobOperationResult,
+};
 pub use registry::etcd::EtcdRegistry;
 pub use registry::redis::RedisRegistry;
 pub use registry::{DynRegistry, Registry, SlotEvent};

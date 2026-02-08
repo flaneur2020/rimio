@@ -1,6 +1,6 @@
 use super::{
-    HealSlotlet, HealSlotletsQuery, HealSlotletsResponse, HealHeadItem, HealHeadsRequest,
-    HealHeadsResponse, HealRepairRequest, HealRepairResponse, InternalHeadApplyRequest,
+    HealHeadItem, HealHeadsRequest, HealHeadsResponse, HealRepairRequest, HealRepairResponse,
+    HealSlotlet, HealSlotletsQuery, HealSlotletsResponse, InternalHeadApplyRequest,
     InternalHeadApplyResponse, InternalHeadResponse, InternalPartPutResponse, InternalPathQuery,
     ServerState, ensure_store, normalize_blob_path, response_error,
 };

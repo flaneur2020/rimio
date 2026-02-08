@@ -1,12 +1,12 @@
 use super::internal::{apply_remote_head_locally, fetch_remote_head};
 use super::{
-    ListItem, ListQuery, ListResponse, NodeItem, NodesResponse, PartPayload, PutBlobResponse,
-    PutCacheEntry, ResolveSlotQuery, ResolveSlotResponse, ServerState, current_nodes, ensure_store,
+    ListItem, ListQuery, ListResponse, NodeItem, NodesResponse, PutBlobResponse, PutCacheEntry,
+    ResolveSlotQuery, ResolveSlotResponse, ServerState, current_nodes, ensure_store,
     normalize_blob_path, resolve_replica_nodes, response_error, status_string,
 };
 use amberblob_core::{
-    AmberError, BlobHead, BlobMeta, HeadKind, PART_SIZE, PartRef, ReplicatedPart, Result,
-    TombstoneMeta, compute_hash, slot_for_key,
+    AmberError, BlobHead, HeadKind, PartRef, PutBlobOperationOutcome, PutBlobOperationRequest,
+    Result, TombstoneMeta, compute_hash, slot_for_key,
 };
 use axum::{
     Json,
@@ -114,149 +114,55 @@ pub(crate) async fn v1_put_blob(
         return (StatusCode::OK, Json(response)).into_response();
     }
 
-    let store = match ensure_store(&state, slot_id).await {
-        Ok(store) => store,
-        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-    };
-
-    let generation = match store.next_generation(&path) {
-        Ok(generation) => generation,
-        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-    };
-
-    let etag = compute_hash(&body);
-    let mut part_payloads: Vec<PartPayload> = Vec::new();
-
-    let mut offset = 0usize;
-    while offset < body.len() {
-        let end = (offset + PART_SIZE).min(body.len());
-        let part_body = body.slice(offset..end);
-        let part_sha = compute_hash(&part_body);
-
-        let put_result = match state
-            .part_store
-            .put_part(slot_id, &path, &part_sha, part_body.clone())
-            .await
-        {
-            Ok(result) => result,
-            Err(error) => {
-                return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
-            }
-        };
-
-        let part = PartRef {
-            name: format!("part.{}", part_sha),
-            sha256: part_sha,
-            offset: offset as u64,
-            length: (end - offset) as u64,
-            external_path: Some(put_result.part_path.to_string_lossy().to_string()),
-            archive_url: None,
-        };
-
-        if let Err(error) = store.upsert_part_entry(&path, &part) {
-            return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
-        }
-
-        part_payloads.push(PartPayload {
-            part,
-            data: part_body,
-        });
-        offset = end;
-    }
-
-    let meta = BlobMeta {
-        path: path.clone(),
-        slot_id,
-        generation,
-        version: generation,
-        size_bytes: body.len() as u64,
-        etag: etag.clone(),
-        parts: part_payloads
-            .iter()
-            .map(|payload| payload.part.clone())
-            .collect(),
-        updated_at: Utc::now(),
-    };
-
-    let meta_bytes = match serde_json::to_vec(&meta) {
-        Ok(bytes) => bytes,
-        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-    };
-    let meta_sha = compute_hash(&meta_bytes);
-
-    let applied = match store.upsert_meta_with_payload(&meta, &meta_bytes, &meta_sha) {
-        Ok(applied) => applied,
-        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-    };
-
-    if !applied {
-        return response_error(
-            StatusCode::CONFLICT,
-            "meta commit rejected by generation check",
-        );
-    }
-
     let replicas = match resolve_replica_nodes(&state, slot_id).await {
         Ok(replicas) => replicas,
         Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
 
-    let quorum = state.coordinator.write_quorum(replicas.len());
-    let local_node_id = state.node.node_id().to_string();
-    let mut committed_replicas = 1usize;
-
-    let replicated_parts: Vec<ReplicatedPart> = part_payloads
-        .iter()
-        .map(|payload| ReplicatedPart {
-            part: payload.part.clone(),
-            data: payload.data.clone(),
+    let operation_result = state
+        .put_blob_operation
+        .run(PutBlobOperationRequest {
+            path: path.clone(),
+            slot_id,
+            write_id: write_id.clone(),
+            body,
+            replicas,
+            local_node_id: state.node.node_id().to_string(),
         })
-        .collect();
+        .await;
 
-    for replica in replicas.iter().filter(|node| node.node_id != local_node_id) {
-        let write_result = state
-            .coordinator
-            .replicate_meta_write(
-                replica,
-                slot_id,
-                &path,
-                &write_id,
-                generation,
-                &replicated_parts,
-                &meta,
-                &meta_sha,
-            )
-            .await;
-
-        if write_result.is_ok() {
-            committed_replicas += 1;
-        } else if let Err(error) = write_result {
-            tracing::warn!(
-                "Replica write failed: node={} slot={} path={} error={}",
-                replica.node_id,
-                slot_id,
-                path,
-                error
+    let (status, generation, etag, size_bytes, committed_replicas) = match operation_result {
+        Ok(PutBlobOperationOutcome::Committed(result)) => (
+            StatusCode::CREATED,
+            result.generation,
+            result.etag,
+            result.size_bytes,
+            result.committed_replicas,
+        ),
+        Ok(PutBlobOperationOutcome::Conflict) => {
+            return response_error(
+                StatusCode::CONFLICT,
+                "meta commit rejected by generation check",
             );
         }
-    }
-
-    if committed_replicas < quorum {
-        return response_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            format!(
-                "quorum not reached: required={}, committed={}",
-                quorum, committed_replicas
-            ),
-        );
-    }
+        Err(AmberError::InsufficientReplicas { required, found }) => {
+            return response_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!(
+                    "quorum not reached: required={}, committed={}",
+                    required, found
+                ),
+            );
+        }
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
 
     state.idempotent_puts.write().await.insert(
         cache_key,
         PutCacheEntry {
             generation,
             etag: etag.clone(),
-            size_bytes: body.len() as u64,
+            size_bytes,
             committed_replicas,
         },
     );
@@ -266,14 +172,13 @@ pub(crate) async fn v1_put_blob(
         slot_id,
         generation,
         etag,
-        size_bytes: body.len() as u64,
+        size_bytes,
         committed_replicas,
         idempotent_replay: None,
     };
 
-    (StatusCode::CREATED, Json(response)).into_response()
+    (status, Json(response)).into_response()
 }
-
 pub(crate) async fn v1_get_blob(
     State(state): State<Arc<ServerState>>,
     Path(raw_path): Path<String>,

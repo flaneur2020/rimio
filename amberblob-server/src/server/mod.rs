@@ -1,7 +1,7 @@
 use crate::config::{Config, RegistryBackend};
 use amberblob_core::{
-    AmberError, Coordinator, EtcdRegistry, MetadataStore, Node, NodeInfo, PartStore, RedisRegistry,
-    Registry, Result,
+    AmberError, Coordinator, EtcdRegistry, MetadataStore, Node, NodeInfo, PartStore,
+    PutBlobOperation, RedisRegistry, Registry, Result,
 };
 use axum::{
     Json, Router,
@@ -25,7 +25,7 @@ use external::{
 };
 use internal::{
     internal_get_head, internal_get_part, internal_put_head, internal_put_part,
-    v1_internal_heal_slotlets, v1_internal_heal_heads, v1_internal_heal_repair,
+    v1_internal_heal_heads, v1_internal_heal_repair, v1_internal_heal_slotlets,
 };
 pub(crate) use types::*;
 
@@ -36,6 +36,7 @@ pub struct ServerState {
     pub(crate) registry: Arc<dyn Registry>,
     pub(crate) config: Config,
     pub(crate) coordinator: Arc<Coordinator>,
+    pub(crate) put_blob_operation: Arc<PutBlobOperation>,
     pub(crate) idempotent_puts: Arc<RwLock<HashMap<String, PutCacheEntry>>>,
 }
 
@@ -85,6 +86,12 @@ pub async fn run_server(config: Config) -> Result<()> {
 
     let coordinator = Arc::new(Coordinator::new(config.replication.min_write_replicas));
 
+    let put_blob_operation = Arc::new(PutBlobOperation::new(
+        slot_manager.clone(),
+        part_store.clone(),
+        coordinator.clone(),
+    ));
+
     let state = Arc::new(ServerState {
         node,
         slot_manager,
@@ -92,6 +99,7 @@ pub async fn run_server(config: Config) -> Result<()> {
         registry,
         config,
         coordinator,
+        put_blob_operation,
         idempotent_puts: Arc::new(RwLock::new(HashMap::new())),
     });
 
