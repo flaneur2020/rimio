@@ -1,0 +1,52 @@
+name: Integration
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: Run integration suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build amberio server (release)
+        run: cargo build --release -p amberio-server --bin amberio
+
+      - name: Run integration tests
+        env:
+          AMBERIO_REDIS_URL: redis://127.0.0.1:6379
+        run: |
+          python3 integration/run_all.py \
+            --binary target/release/amberio \
+            --redis-url redis://127.0.0.1:6379
