@@ -3,7 +3,7 @@ use bytes::Bytes;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub struct InternalPartOperation {
+pub struct InternalPutPartOperation {
     slot_manager: Arc<SlotManager>,
     part_store: Arc<PartStore>,
 }
@@ -24,20 +24,7 @@ pub struct InternalPutPartOperationResult {
     pub sha256: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct InternalGetPartOperationRequest {
-    pub slot_id: u16,
-    pub sha256: String,
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum InternalGetPartOperationOutcome {
-    Found(Bytes),
-    NotFound,
-}
-
-impl InternalPartOperation {
+impl InternalPutPartOperation {
     pub fn new(slot_manager: Arc<SlotManager>, part_store: Arc<PartStore>) -> Self {
         Self {
             slot_manager,
@@ -45,7 +32,7 @@ impl InternalPartOperation {
         }
     }
 
-    pub async fn run_put(
+    pub async fn run(
         &self,
         request: InternalPutPartOperationRequest,
     ) -> Result<InternalPutPartOperationResult> {
@@ -92,34 +79,6 @@ impl InternalPartOperation {
             reused: put_result.reused,
             sha256,
         })
-    }
-
-    pub async fn run_get(
-        &self,
-        request: InternalGetPartOperationRequest,
-    ) -> Result<InternalGetPartOperationOutcome> {
-        let InternalGetPartOperationRequest {
-            slot_id,
-            sha256,
-            path,
-        } = request;
-
-        if let Some(path) = path {
-            match self.part_store.get_part(slot_id, &path, &sha256).await {
-                Ok(bytes) => return Ok(InternalGetPartOperationOutcome::Found(bytes)),
-                Err(_) => return Ok(InternalGetPartOperationOutcome::NotFound),
-            }
-        }
-
-        let store = self.ensure_store(slot_id).await?;
-        let external_path = store.find_part_external_path(&sha256, None)?;
-
-        let Some(external_path) = external_path else {
-            return Ok(InternalGetPartOperationOutcome::NotFound);
-        };
-
-        let bytes = tokio::fs::read(external_path).await?;
-        Ok(InternalGetPartOperationOutcome::Found(Bytes::from(bytes)))
     }
 
     async fn ensure_store(&self, slot_id: u16) -> Result<MetadataStore> {

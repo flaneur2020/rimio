@@ -1,9 +1,9 @@
 use crate::config::{Config, RegistryBackend};
 use amberblob_core::{
     AmberError, Coordinator, DeleteBlobOperation, EtcdRegistry, HealHeadsOperation,
-    HealRepairOperation, HealSlotletsOperation, InternalHeadApplyOperation, InternalPartOperation,
-    ListBlobsOperation, Node, NodeInfo, PartStore, PutBlobOperation, ReadBlobOperation,
-    RedisRegistry, Registry, Result,
+    HealRepairOperation, HealSlotletsOperation, InternalGetHeadOperation, InternalGetPartOperation,
+    InternalPutHeadOperation, InternalPutPartOperation, ListBlobsOperation, Node, NodeInfo,
+    PartStore, PutBlobOperation, ReadBlobOperation, RedisRegistry, Registry, Result,
 };
 use axum::{
     Json, Router,
@@ -40,8 +40,10 @@ pub struct ServerState {
     pub(crate) read_blob_operation: Arc<ReadBlobOperation>,
     pub(crate) delete_blob_operation: Arc<DeleteBlobOperation>,
     pub(crate) list_blobs_operation: Arc<ListBlobsOperation>,
-    pub(crate) internal_part_operation: Arc<InternalPartOperation>,
-    pub(crate) internal_head_operation: Arc<InternalHeadApplyOperation>,
+    pub(crate) internal_put_part_operation: Arc<InternalPutPartOperation>,
+    pub(crate) internal_get_part_operation: Arc<InternalGetPartOperation>,
+    pub(crate) internal_put_head_operation: Arc<InternalPutHeadOperation>,
+    pub(crate) internal_get_head_operation: Arc<InternalGetHeadOperation>,
     pub(crate) heal_slotlets_operation: Arc<HealSlotletsOperation>,
     pub(crate) heal_heads_operation: Arc<HealHeadsOperation>,
     pub(crate) heal_repair_operation: Arc<HealRepairOperation>,
@@ -109,14 +111,21 @@ pub async fn run_server(config: Config) -> Result<()> {
         coordinator.clone(),
     ));
     let list_blobs_operation = Arc::new(ListBlobsOperation::new(slot_manager.clone()));
-    let internal_part_operation = Arc::new(InternalPartOperation::new(
+
+    let internal_put_part_operation = Arc::new(InternalPutPartOperation::new(
         slot_manager.clone(),
         part_store.clone(),
     ));
-    let internal_head_operation = Arc::new(InternalHeadApplyOperation::new(
+    let internal_get_part_operation = Arc::new(InternalGetPartOperation::new(
         slot_manager.clone(),
         part_store.clone(),
     ));
+    let internal_put_head_operation = Arc::new(InternalPutHeadOperation::new(
+        slot_manager.clone(),
+        part_store.clone(),
+    ));
+    let internal_get_head_operation = Arc::new(InternalGetHeadOperation::new(slot_manager.clone()));
+
     let heal_slotlets_operation = Arc::new(HealSlotletsOperation::new(slot_manager.clone()));
     let heal_heads_operation = Arc::new(HealHeadsOperation::new(slot_manager.clone()));
     let heal_repair_operation = Arc::new(HealRepairOperation::new(read_blob_operation.clone()));
@@ -130,8 +139,10 @@ pub async fn run_server(config: Config) -> Result<()> {
         read_blob_operation,
         delete_blob_operation,
         list_blobs_operation,
-        internal_part_operation,
-        internal_head_operation,
+        internal_put_part_operation,
+        internal_get_part_operation,
+        internal_put_head_operation,
+        internal_get_head_operation,
         heal_slotlets_operation,
         heal_heads_operation,
         heal_repair_operation,

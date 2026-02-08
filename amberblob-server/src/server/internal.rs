@@ -8,7 +8,7 @@ use amberblob_core::{
     AmberError, HeadKind, HealHeadsOperationRequest, HealRepairOperationRequest,
     HealSlotletsOperationRequest, InternalGetHeadOperationOutcome, InternalGetHeadOperationRequest,
     InternalGetPartOperationOutcome, InternalGetPartOperationRequest,
-    InternalHeadApplyOperationRequest, InternalPutPartOperationRequest,
+    InternalPutHeadOperationRequest, InternalPutPartOperationRequest,
 };
 use axum::{
     Json,
@@ -46,8 +46,8 @@ pub(crate) async fn internal_put_part(
         .and_then(|value| value.parse::<u64>().ok());
 
     let result = state
-        .internal_part_operation
-        .run_put(InternalPutPartOperationRequest {
+        .internal_put_part_operation
+        .run(InternalPutPartOperationRequest {
             slot_id,
             path,
             sha256,
@@ -88,8 +88,8 @@ pub(crate) async fn internal_get_part(
     };
 
     let result = state
-        .internal_part_operation
-        .run_get(InternalGetPartOperationRequest {
+        .internal_get_part_operation
+        .run(InternalGetPartOperationRequest {
             slot_id,
             sha256,
             path,
@@ -128,8 +128,8 @@ pub(crate) async fn internal_put_head(
     };
 
     let result = state
-        .internal_head_operation
-        .run_apply(InternalHeadApplyOperationRequest {
+        .internal_put_head_operation
+        .run(InternalPutHeadOperationRequest {
             slot_id,
             query_path,
             head_kind: request.head_kind,
@@ -172,8 +172,8 @@ pub(crate) async fn internal_get_head(
     };
 
     let result = state
-        .internal_head_operation
-        .run_get(InternalGetHeadOperationRequest { slot_id, path })
+        .internal_get_head_operation
+        .run(InternalGetHeadOperationRequest { slot_id, path })
         .await;
 
     match result {

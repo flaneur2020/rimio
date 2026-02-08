@@ -1,18 +1,18 @@
 use crate::{
-    AmberError, BlobMeta, HeadKind, MetadataStore, PartStore, Result, SlotManager, TombstoneMeta,
+    AmberError, BlobMeta, MetadataStore, PartStore, Result, SlotManager, TombstoneMeta,
     compute_hash,
 };
 use chrono::Utc;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub struct InternalHeadApplyOperation {
+pub struct InternalPutHeadOperation {
     slot_manager: Arc<SlotManager>,
     part_store: Arc<PartStore>,
 }
 
 #[derive(Debug, Clone)]
-pub struct InternalHeadApplyOperationRequest {
+pub struct InternalPutHeadOperationRequest {
     pub slot_id: u16,
     pub query_path: Option<String>,
     pub head_kind: String,
@@ -23,33 +23,12 @@ pub struct InternalHeadApplyOperationRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct InternalHeadApplyOperationResult {
+pub struct InternalPutHeadOperationResult {
     pub head_kind: String,
     pub generation: i64,
 }
 
-#[derive(Debug, Clone)]
-pub struct InternalGetHeadOperationRequest {
-    pub slot_id: u16,
-    pub path: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct InternalHeadRecord {
-    pub head_kind: HeadKind,
-    pub generation: i64,
-    pub head_sha256: String,
-    pub meta: Option<BlobMeta>,
-    pub tombstone: Option<TombstoneMeta>,
-}
-
-#[derive(Debug, Clone)]
-pub enum InternalGetHeadOperationOutcome {
-    Found(InternalHeadRecord),
-    NotFound,
-}
-
-impl InternalHeadApplyOperation {
+impl InternalPutHeadOperation {
     pub fn new(slot_manager: Arc<SlotManager>, part_store: Arc<PartStore>) -> Self {
         Self {
             slot_manager,
@@ -57,11 +36,11 @@ impl InternalHeadApplyOperation {
         }
     }
 
-    pub async fn run_apply(
+    pub async fn run(
         &self,
-        request: InternalHeadApplyOperationRequest,
-    ) -> Result<InternalHeadApplyOperationResult> {
-        let InternalHeadApplyOperationRequest {
+        request: InternalPutHeadOperationRequest,
+    ) -> Result<InternalPutHeadOperationResult> {
+        let InternalPutHeadOperationRequest {
             slot_id,
             query_path,
             head_kind,
@@ -110,7 +89,7 @@ impl InternalHeadApplyOperation {
 
                 store.upsert_meta_with_payload(&meta, &inline_data, &head_sha)?;
 
-                Ok(InternalHeadApplyOperationResult {
+                Ok(InternalPutHeadOperationResult {
                     head_kind: "meta".to_string(),
                     generation: meta.generation,
                 })
@@ -137,7 +116,7 @@ impl InternalHeadApplyOperation {
 
                 store.insert_tombstone_with_payload(&tombstone, &inline_data, &head_sha)?;
 
-                Ok(InternalHeadApplyOperationResult {
+                Ok(InternalPutHeadOperationResult {
                     head_kind: "tombstone".to_string(),
                     generation: tombstone.generation,
                 })
@@ -146,28 +125,6 @@ impl InternalHeadApplyOperation {
                 "head_kind must be meta or tombstone".to_string(),
             )),
         }
-    }
-
-    pub async fn run_get(
-        &self,
-        request: InternalGetHeadOperationRequest,
-    ) -> Result<InternalGetHeadOperationOutcome> {
-        let InternalGetHeadOperationRequest { slot_id, path } = request;
-
-        let store = self.ensure_store(slot_id).await?;
-        let head = store.get_current_head(&path)?;
-
-        let Some(head) = head else {
-            return Ok(InternalGetHeadOperationOutcome::NotFound);
-        };
-
-        Ok(InternalGetHeadOperationOutcome::Found(InternalHeadRecord {
-            head_kind: head.head_kind,
-            generation: head.generation,
-            head_sha256: head.head_sha256,
-            meta: head.meta,
-            tombstone: head.tombstone,
-        }))
     }
 
     async fn ensure_store(&self, slot_id: u16) -> Result<MetadataStore> {
