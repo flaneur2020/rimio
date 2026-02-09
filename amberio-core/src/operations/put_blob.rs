@@ -1,6 +1,6 @@
 use crate::{
-    AmberError, BlobMeta, Coordinator, MetadataStore, PART_SIZE, PartIndexState, PartStore,
-    ReplicatedPart, Result, SlotManager, compute_hash,
+    AmberError, BlobMeta, ClusterClient, Coordinator, MetadataStore, PART_SIZE, PartIndexState,
+    PartStore, ReplicatedPart, Result, SlotManager, compute_hash,
 };
 use bytes::Bytes;
 use chrono::Utc;
@@ -11,6 +11,7 @@ pub struct PutBlobOperation {
     slot_manager: Arc<SlotManager>,
     part_store: Arc<PartStore>,
     coordinator: Arc<Coordinator>,
+    cluster_client: Arc<ClusterClient>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,11 +43,13 @@ impl PutBlobOperation {
         slot_manager: Arc<SlotManager>,
         part_store: Arc<PartStore>,
         coordinator: Arc<Coordinator>,
+        cluster_client: Arc<ClusterClient>,
     ) -> Self {
         Self {
             slot_manager,
             part_store,
             coordinator,
+            cluster_client,
         }
     }
 
@@ -144,9 +147,9 @@ impl PutBlobOperation {
             .filter(|node| node.node_id != local_node_id.as_str())
         {
             let write_result = self
-                .coordinator
+                .cluster_client
                 .replicate_meta_write(
-                    replica,
+                    &replica.node_id,
                     slot_id,
                     &path,
                     &write_id,

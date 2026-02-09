@@ -1,7 +1,7 @@
 use crate::config::RuntimeConfig;
 use amberio_core::{
-    AmberError, Coordinator, DeleteBlobOperation, HealHeadsOperation, HealRepairOperation,
-    HealSlotletsOperation, InternalGetHeadOperation, InternalGetPartOperation,
+    AmberError, ClusterClient, Coordinator, DeleteBlobOperation, HealHeadsOperation,
+    HealRepairOperation, HealSlotletsOperation, InternalGetHeadOperation, InternalGetPartOperation,
     InternalPutHeadOperation, InternalPutPartOperation, ListBlobsOperation, Node, NodeInfo,
     PartStore, PutBlobOperation, ReadBlobOperation, Registry, Result,
 };
@@ -80,20 +80,23 @@ pub async fn run_server(config: RuntimeConfig, registry: Arc<dyn Registry>) -> R
     let part_store = Arc::new(PartStore::new(data_dir)?);
 
     let coordinator = Arc::new(Coordinator::new(config.replication.min_write_replicas));
+    let cluster_client = Arc::new(ClusterClient::new(registry.clone()));
 
     let put_blob_operation = Arc::new(PutBlobOperation::new(
         slot_manager.clone(),
         part_store.clone(),
         coordinator.clone(),
+        cluster_client.clone(),
     ));
     let read_blob_operation = Arc::new(ReadBlobOperation::new(
         slot_manager.clone(),
         part_store.clone(),
-        coordinator.clone(),
+        cluster_client.clone(),
     ));
     let delete_blob_operation = Arc::new(DeleteBlobOperation::new(
         slot_manager.clone(),
         coordinator.clone(),
+        cluster_client.clone(),
     ));
     let list_blobs_operation = Arc::new(ListBlobsOperation::new(slot_manager.clone()));
 

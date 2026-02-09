@@ -23,12 +23,7 @@ pub use heal_slotlets::{
     HealSlotletItem, HealSlotletsOperation, HealSlotletsOperationRequest,
     HealSlotletsOperationResult,
 };
-pub use init_cluster::{
-    InitClusterArchiveConfig, InitClusterArchiveS3Config, InitClusterArchiveS3Credentials,
-    InitClusterBootstrapState, InitClusterDiskConfig, InitClusterNodeConfig, InitClusterOperation,
-    InitClusterOperationRequest, InitClusterOperationResult, InitClusterReplicationConfig,
-    InitClusterScanConfig, InitClusterScanRedisMockConfig,
-};
+pub use init_cluster::InitClusterOperation;
 pub use internal_get_head::{
     InternalGetHeadOperation, InternalGetHeadOperationOutcome, InternalGetHeadOperationRequest,
     InternalHeadRecord,

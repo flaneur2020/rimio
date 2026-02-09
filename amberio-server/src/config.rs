@@ -1,8 +1,7 @@
 use amberio_core::{
-    AmberError, InitClusterArchiveConfig, InitClusterArchiveS3Config,
-    InitClusterArchiveS3Credentials, InitClusterBootstrapState, InitClusterDiskConfig,
-    InitClusterNodeConfig, InitClusterOperationRequest, InitClusterReplicationConfig,
-    InitClusterScanConfig, InitClusterScanRedisMockConfig, RegistryBuilder, Result,
+    AmberError, ClusterArchiveConfig, ClusterArchiveS3Config, ClusterArchiveS3Credentials,
+    ClusterDiskConfig, ClusterInitRequest, ClusterInitScanConfig, ClusterInitScanRedisMockConfig,
+    ClusterNodeConfig, ClusterReplicationConfig, ClusterState, RegistryBuilder, Result,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -142,7 +141,7 @@ pub struct InitScanRedisMockConfig {
     pub list_key: String,
 }
 
-pub type BootstrapState = InitClusterBootstrapState;
+pub type BootstrapState = ClusterState;
 
 impl Config {
     pub fn from_file(path: &str) -> Result<Self> {
@@ -159,50 +158,47 @@ impl Config {
         Ok(config)
     }
 
-    pub fn to_init_cluster_request(&self) -> InitClusterOperationRequest {
-        InitClusterOperationRequest {
+    pub fn to_init_cluster_request(&self) -> ClusterInitRequest {
+        ClusterInitRequest {
             current_node: self.current_node.clone(),
             nodes: self
                 .initial_cluster
                 .nodes
                 .iter()
-                .map(|node| InitClusterNodeConfig {
+                .map(|node| ClusterNodeConfig {
                     node_id: node.node_id.clone(),
                     bind_addr: node.bind_addr.clone(),
                     advertise_addr: node.advertise_addr.clone(),
                     disks: node
                         .disks
                         .iter()
-                        .map(|disk| InitClusterDiskConfig {
+                        .map(|disk| ClusterDiskConfig {
                             path: disk.path.clone(),
                         })
                         .collect(),
                 })
                 .collect(),
-            replication: InitClusterReplicationConfig {
+            replication: ClusterReplicationConfig {
                 min_write_replicas: self.initial_cluster.replication.min_write_replicas,
                 total_slots: self.initial_cluster.replication.total_slots,
             },
-            archive: self
-                .archive
-                .as_ref()
-                .map(|archive| InitClusterArchiveConfig {
-                    archive_type: archive.archive_type.clone(),
-                    s3: archive.s3.as_ref().map(|s3| InitClusterArchiveS3Config {
-                        bucket: s3.bucket.clone(),
-                        region: s3.region.clone(),
-                        credentials: InitClusterArchiveS3Credentials {
-                            access_key_id: s3.credentials.access_key_id.clone(),
-                            secret_access_key: s3.credentials.secret_access_key.clone(),
-                        },
-                    }),
+            archive: self.archive.as_ref().map(|archive| ClusterArchiveConfig {
+                archive_type: archive.archive_type.clone(),
+                s3: archive.s3.as_ref().map(|s3| ClusterArchiveS3Config {
+                    bucket: s3.bucket.clone(),
+                    region: s3.region.clone(),
+                    credentials: ClusterArchiveS3Credentials {
+                        access_key_id: s3.credentials.access_key_id.clone(),
+                        secret_access_key: s3.credentials.secret_access_key.clone(),
+                    },
                 }),
-            init_scan: self.init_scan.as_ref().map(|scan| InitClusterScanConfig {
+            }),
+            init_scan: self.init_scan.as_ref().map(|scan| ClusterInitScanConfig {
                 enabled: scan.enabled,
                 redis_mock: scan
                     .redis_mock
                     .as_ref()
-                    .map(|mock| InitClusterScanRedisMockConfig {
+                    .map(|mock| ClusterInitScanRedisMockConfig {
                         url: mock.url.clone(),
                         list_key: mock.list_key.clone(),
                     }),

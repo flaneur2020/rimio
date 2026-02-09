@@ -306,16 +306,15 @@ pub(crate) async fn v1_internal_heal_repair(
         Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
 
-    let source = match nodes.iter().find(|node| node.node_id == source_node_id) {
-        Some(source) => source.clone(),
-        None => return response_error(StatusCode::NOT_FOUND, "source node not found"),
-    };
+    if !nodes.iter().any(|node| node.node_id == source_node_id) {
+        return response_error(StatusCode::NOT_FOUND, "source node not found");
+    }
 
     let result = state
         .heal_repair_operation
         .run(HealRepairOperationRequest {
             slot_id,
-            source,
+            source_node_id,
             blob_paths: request.blob_paths,
             dry_run: request.dry_run,
         })

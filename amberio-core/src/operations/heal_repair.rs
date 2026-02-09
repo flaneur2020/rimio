@@ -1,5 +1,5 @@
 use crate::operations::read_blob::ReadBlobOperation;
-use crate::{AmberError, NodeInfo, Result};
+use crate::{AmberError, Result};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -10,7 +10,7 @@ pub struct HealRepairOperation {
 #[derive(Debug, Clone)]
 pub struct HealRepairOperationRequest {
     pub slot_id: u16,
-    pub source: NodeInfo,
+    pub source_node_id: String,
     pub blob_paths: Vec<String>,
     pub dry_run: bool,
 }
@@ -35,7 +35,7 @@ impl HealRepairOperation {
     ) -> Result<HealRepairOperationResult> {
         let HealRepairOperationRequest {
             slot_id,
-            source,
+            source_node_id,
             blob_paths,
             dry_run,
         } = request;
@@ -61,7 +61,7 @@ impl HealRepairOperation {
 
             let remote_head = match self
                 .read_blob_operation
-                .fetch_remote_head(&source.address, slot_id, &path)
+                .fetch_remote_head(&source_node_id, slot_id, &path)
                 .await
             {
                 Ok(Some(head)) => head,
@@ -79,7 +79,7 @@ impl HealRepairOperation {
 
             match self
                 .read_blob_operation
-                .repair_path_from_head(&source, slot_id, &path, &remote_head)
+                .repair_path_from_head(&source_node_id, slot_id, &path, &remote_head)
                 .await
             {
                 Ok(_) => repaired_objects += 1,

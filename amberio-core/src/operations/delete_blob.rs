@@ -1,5 +1,6 @@
 use crate::{
-    AmberError, Coordinator, MetadataStore, Result, SlotManager, TombstoneMeta, compute_hash,
+    AmberError, ClusterClient, Coordinator, MetadataStore, Result, SlotManager, TombstoneMeta,
+    compute_hash,
 };
 use chrono::Utc;
 use std::sync::Arc;
@@ -8,6 +9,7 @@ use std::sync::Arc;
 pub struct DeleteBlobOperation {
     slot_manager: Arc<SlotManager>,
     coordinator: Arc<Coordinator>,
+    cluster_client: Arc<ClusterClient>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,10 +34,15 @@ pub enum DeleteBlobOperationOutcome {
 }
 
 impl DeleteBlobOperation {
-    pub fn new(slot_manager: Arc<SlotManager>, coordinator: Arc<Coordinator>) -> Self {
+    pub fn new(
+        slot_manager: Arc<SlotManager>,
+        coordinator: Arc<Coordinator>,
+        cluster_client: Arc<ClusterClient>,
+    ) -> Self {
         Self {
             slot_manager,
             coordinator,
+            cluster_client,
         }
     }
 
@@ -79,9 +86,9 @@ impl DeleteBlobOperation {
             .filter(|node| node.node_id != local_node_id.as_str())
         {
             let response = self
-                .coordinator
+                .cluster_client
                 .replicate_tombstone_write(
-                    replica,
+                    &replica.node_id,
                     slot_id,
                     &path,
                     &write_id,

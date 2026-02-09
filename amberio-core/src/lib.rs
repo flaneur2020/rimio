@@ -1,6 +1,6 @@
 //! Amberio Core - Core library for lightweight object storage for edge cloud nodes
 
-pub mod coordinator;
+pub mod cluster;
 pub mod error;
 pub mod node;
 pub mod operations;
@@ -8,7 +8,7 @@ pub mod registry;
 pub mod slot_manager;
 pub mod storage;
 
-pub use coordinator::{Coordinator, ReplicatedPart};
+pub use cluster::*;
 pub use error::{AmberError, Result};
 pub use node::{Node, NodeInfo, NodeStatus};
 pub use operations::*;

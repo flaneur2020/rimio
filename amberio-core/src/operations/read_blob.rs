@@ -1,9 +1,8 @@
 use crate::{
-    AmberError, BlobHead, BlobMeta, Coordinator, HeadKind, MetadataStore, NodeInfo, PART_SIZE,
+    AmberError, BlobHead, BlobMeta, ClusterClient, HeadKind, MetadataStore, NodeInfo, PART_SIZE,
     PartStore, Result, SlotManager, compute_hash,
 };
 use bytes::Bytes;
-use chrono::Utc;
 use reqwest::{Url, header::HeaderMap};
 use std::path::Path;
 use std::sync::Arc;
@@ -12,7 +11,7 @@ use std::sync::Arc;
 pub struct ReadBlobOperation {
     slot_manager: Arc<SlotManager>,
     part_store: Arc<PartStore>,
-    coordinator: Arc<Coordinator>,
+    cluster_client: Arc<ClusterClient>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -49,12 +48,12 @@ impl ReadBlobOperation {
     pub fn new(
         slot_manager: Arc<SlotManager>,
         part_store: Arc<PartStore>,
-        coordinator: Arc<Coordinator>,
+        cluster_client: Arc<ClusterClient>,
     ) -> Self {
         Self {
             slot_manager,
             part_store,
-            coordinator,
+            cluster_client,
         }
     }
 
@@ -162,73 +161,13 @@ impl ReadBlobOperation {
 
     pub async fn fetch_remote_head(
         &self,
-        address: &str,
+        node_id: &str,
         slot_id: u16,
         path: &str,
     ) -> Result<Option<BlobHead>> {
-        let head_url = self.coordinator.internal_head_url(address, slot_id, path)?;
-        let response = self
-            .coordinator
-            .client()
-            .get(head_url)
-            .send()
+        self.cluster_client
+            .fetch_remote_head(node_id, slot_id, path)
             .await
-            .map_err(|error| AmberError::Http(error.to_string()))?;
-
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-
-        if !response.status().is_success() {
-            return Err(AmberError::Http(format!(
-                "internal head fetch failed: status={} path={}",
-                response.status(),
-                path
-            )));
-        }
-
-        #[derive(serde::Deserialize)]
-        struct InternalHeadResponse {
-            found: bool,
-            head_kind: Option<String>,
-            generation: Option<i64>,
-            head_sha256: Option<String>,
-            meta: Option<BlobMeta>,
-            tombstone: Option<crate::TombstoneMeta>,
-        }
-
-        let payload: InternalHeadResponse = response
-            .json()
-            .await
-            .map_err(|error| AmberError::Http(error.to_string()))?;
-
-        if !payload.found {
-            return Ok(None);
-        }
-
-        let head_kind = match payload.head_kind.as_deref() {
-            Some("meta") => HeadKind::Meta,
-            Some("tombstone") => HeadKind::Tombstone,
-            _ => return Err(AmberError::Internal("invalid remote head kind".to_string())),
-        };
-
-        let generation = payload
-            .generation
-            .ok_or_else(|| AmberError::Internal("missing remote generation".to_string()))?;
-
-        let head_sha256 = payload
-            .head_sha256
-            .ok_or_else(|| AmberError::Internal("missing remote head_sha256".to_string()))?;
-
-        Ok(Some(BlobHead {
-            path: path.to_string(),
-            generation,
-            head_kind,
-            head_sha256,
-            updated_at: Utc::now(),
-            meta: payload.meta,
-            tombstone: payload.tombstone,
-        }))
     }
 
     pub async fn apply_remote_head_locally(
@@ -280,7 +219,7 @@ impl ReadBlobOperation {
 
     pub async fn repair_path_from_head(
         &self,
-        source: &NodeInfo,
+        source_node_id: &str,
         slot_id: u16,
         path: &str,
         remote_head: &BlobHead,
@@ -315,38 +254,13 @@ impl ReadBlobOperation {
                     continue;
                 }
 
-                let part_url = self.coordinator.internal_part_url_by_index(
-                    &source.address,
-                    slot_id,
-                    path,
-                    meta.generation,
-                    part_no,
-                )?;
+                let payload = self
+                    .cluster_client
+                    .fetch_part_by_index(source_node_id, slot_id, path, meta.generation, part_no)
+                    .await?;
 
-                let response = self
-                    .coordinator
-                    .client()
-                    .get(part_url)
-                    .send()
-                    .await
-                    .map_err(|error| AmberError::Http(error.to_string()))?;
-
-                if !response.status().is_success() {
-                    return Err(AmberError::Http(format!(
-                        "failed to fetch part_no {} from source {}: {}",
-                        part_no,
-                        source.node_id,
-                        response.status()
-                    )));
-                }
-
-                let headers = response.headers().clone();
-                let bytes = response
-                    .bytes()
-                    .await
-                    .map_err(|error| AmberError::Http(error.to_string()))?;
-
-                let sha256 = resolve_part_sha256(Some(&headers), &bytes, None);
+                let sha256 = resolve_part_sha256(Some(&payload.headers), &payload.bytes, None);
+                let bytes = payload.bytes;
 
                 let put_result = self
                     .part_store
@@ -389,7 +303,7 @@ impl ReadBlobOperation {
         }
 
         for node in replicas.iter().filter(|node| node.node_id != local_node_id) {
-            if let Some(remote_head) = self.fetch_remote_head(&node.address, slot_id, path).await? {
+            if let Some(remote_head) = self.fetch_remote_head(&node.node_id, slot_id, path).await? {
                 self.apply_remote_head_locally(slot_id, path, &remote_head)
                     .await?;
                 return Ok(Some(remote_head));
@@ -590,45 +504,24 @@ impl ReadBlobOperation {
         expected_sha256: Option<&str>,
     ) -> Result<Bytes> {
         for peer in peers {
-            let part_url = if let Some(sha256) = expected_sha256 {
-                self.coordinator.internal_part_url_by_sha(
-                    &peer.address,
-                    slot_id,
-                    sha256,
-                    path,
-                    generation,
-                    part_no,
-                )
+            let payload = if let Some(sha256) = expected_sha256 {
+                self.cluster_client
+                    .fetch_part_by_sha(&peer.node_id, slot_id, sha256, path, generation, part_no)
+                    .await
             } else {
-                self.coordinator.internal_part_url_by_index(
-                    &peer.address,
-                    slot_id,
-                    path,
-                    generation,
-                    part_no,
-                )
+                self.cluster_client
+                    .fetch_part_by_index(&peer.node_id, slot_id, path, generation, part_no)
+                    .await
             };
 
-            let Ok(part_url) = part_url else {
-                continue;
-            };
-
-            let response = match self.coordinator.client().get(part_url).send().await {
-                Ok(response) => response,
+            let payload = match payload {
+                Ok(payload) => payload,
                 Err(_) => continue,
             };
 
-            if !response.status().is_success() {
-                continue;
-            }
-
-            let headers = response.headers().clone();
-            let bytes = match response.bytes().await {
-                Ok(bytes) => bytes,
-                Err(_) => continue,
-            };
-
-            let sha256 = resolve_part_sha256(Some(&headers), &bytes, expected_sha256);
+            let sha256 =
+                resolve_part_sha256(Some(&payload.headers), &payload.bytes, expected_sha256);
+            let bytes = payload.bytes;
             if let Some(expected_sha256) = expected_sha256 {
                 if sha256 != expected_sha256 {
                     continue;
