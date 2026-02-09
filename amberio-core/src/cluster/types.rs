@@ -64,6 +64,10 @@ pub struct ClusterArchiveConfig {
 pub struct ClusterArchiveS3Config {
     pub bucket: String,
     pub region: String,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub allow_http: bool,
     pub credentials: ClusterArchiveS3Credentials,
 }
 

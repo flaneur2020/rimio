@@ -192,6 +192,8 @@ impl S3ArchiveStore {
     pub fn new(
         bucket: &str,
         region: &str,
+        endpoint: Option<&str>,
+        allow_http: bool,
         access_key_id: &str,
         secret_access_key: &str,
     ) -> Result<Self> {
@@ -209,11 +211,21 @@ impl S3ArchiveStore {
             ));
         }
 
-        let store = AmazonS3Builder::new()
+        let mut builder = AmazonS3Builder::new()
             .with_bucket_name(bucket_trimmed)
             .with_region(region_trimmed)
             .with_access_key_id(access_key_id)
-            .with_secret_access_key(secret_access_key)
+            .with_secret_access_key(secret_access_key);
+
+        if let Some(endpoint) = endpoint.map(str::trim).filter(|value| !value.is_empty()) {
+            builder = builder.with_endpoint(endpoint);
+        }
+
+        if allow_http {
+            builder = builder.with_allow_http(true);
+        }
+
+        let store = builder
             .build()
             .map_err(|error| AmberError::Config(format!("archive s3 config error: {}", error)))?;
 

@@ -53,7 +53,6 @@ pub struct RuntimeNodeConfig {
     pub disks: Vec<DiskConfig>,
 }
 
-/// Registry backend configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryConfig {
     pub backend: RegistryBackend,
@@ -117,6 +116,10 @@ fn default_archive_redis_key_prefix() -> String {
 pub struct S3Config {
     pub bucket: String,
     pub region: String,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub allow_http: bool,
     pub credentials: S3Credentials,
 }
 
@@ -206,6 +209,8 @@ impl Config {
                 s3: archive.s3.as_ref().map(|s3| ClusterArchiveS3Config {
                     bucket: s3.bucket.clone(),
                     region: s3.region.clone(),
+                    endpoint: s3.endpoint.clone(),
+                    allow_http: s3.allow_http,
                     credentials: ClusterArchiveS3Credentials {
                         access_key_id: s3.credentials.access_key_id.clone(),
                         secret_access_key: s3.credentials.secret_access_key.clone(),
@@ -292,6 +297,8 @@ impl Config {
                 s3: archive.s3.as_ref().map(|s3| S3Config {
                     bucket: s3.bucket.clone(),
                     region: s3.region.clone(),
+                    endpoint: s3.endpoint.clone(),
+                    allow_http: s3.allow_http,
                     credentials: S3Credentials {
                         access_key_id: s3.credentials.access_key_id.clone(),
                         secret_access_key: s3.credentials.secret_access_key.clone(),

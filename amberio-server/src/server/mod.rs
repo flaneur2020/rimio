@@ -228,6 +228,8 @@ fn build_runtime_archive(
         let s3_store = Arc::new(S3ArchiveStore::new(
             s3.bucket.as_str(),
             s3.region.as_str(),
+            s3.endpoint.as_deref(),
+            s3.allow_http,
             s3.credentials.access_key_id.as_str(),
             s3.credentials.secret_access_key.as_str(),
         )?);

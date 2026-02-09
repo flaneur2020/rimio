@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,12 +13,23 @@ from pathlib import Path
 INTEGRATION_DIR = Path(__file__).resolve().parent
 
 
-def discover_cases() -> list[Path]:
-    return sorted(
+def discover_cases(*, include_s3: bool) -> list[Path]:
+    cases = sorted(
         path
         for path in INTEGRATION_DIR.glob("[0-9][0-9][0-9]_*.py")
         if path.name != "run_all.py"
     )
+
+    if include_s3:
+        return cases
+
+    return [case for case in cases if not case.name.startswith("012_")]
+
+
+def _truthy(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def main() -> None:
@@ -37,9 +49,15 @@ def main() -> None:
     parser.add_argument("--internal-prefix", default=None)
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--build-if-missing", action="store_true")
+    parser.add_argument(
+        "--include-s3",
+        action="store_true",
+        help="Include 012 S3/MinIO integration case",
+    )
     args = parser.parse_args()
 
-    cases = discover_cases()
+    include_s3 = args.include_s3 or _truthy(os.getenv("AMBERIO_ENABLE_S3_IT"))
+    cases = discover_cases(include_s3=include_s3)
     if args.case_prefix:
         cases = [case for case in cases if case.name.startswith(args.case_prefix)]
 

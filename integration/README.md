@@ -48,11 +48,20 @@ python3 integration/008_tla_trace_check.py \
 
 - `007_rfc003_archive_url_redis_readthrough.py`: validates `archive_url(redis://)` range fallback and read-through materialization.
 - `011_archive_write_through_redis.py`: validates archive write-through on PUT plus fallback/read-through after local part deletion.
+- `012_archive_write_through_s3_minio.py`: validates S3/MinIO write-through and fallback read-through.
+
+By default, `run_all.py` skips case `012`.
+
+Enable it with either:
+
+- `AMBERIO_ENABLE_S3_IT=1 python3 integration/run_all.py ...`
+- `python3 integration/run_all.py --include-s3 ...`
 
 ## Notes
 
 - Each case auto-generates cluster configs and data directories under a temporary folder.
 - Redis is not started by scripts.
+- Case `012` expects a reachable S3-compatible endpoint (e.g. MinIO) with a pre-created bucket.
 - Use `--keep-artifacts` to keep generated configs/logs for debugging.
 - API prefixes default to:
   - External: `/api/v1`
