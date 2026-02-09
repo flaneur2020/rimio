@@ -44,6 +44,11 @@ python3 integration/008_tla_trace_check.py \
 - `009_server_init_only.py`: validates auto-init, explicit `--init`, and first-wins bootstrap persisted in registry.
 - `010_init_scan_redis_mock.py`: validates optional `init_scan` import using Redis-mocked archive object listing.
 
+## Archive cases
+
+- `007_rfc003_archive_url_redis_readthrough.py`: validates `archive_url(redis://)` range fallback and read-through materialization.
+- `011_archive_write_through_redis.py`: validates archive write-through on PUT plus fallback/read-through after local part deletion.
+
 ## Notes
 
 - Each case auto-generates cluster configs and data directories under a temporary folder.

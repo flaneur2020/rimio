@@ -42,7 +42,8 @@ pub use list_blobs::{
     ListBlobItem, ListBlobsOperation, ListBlobsOperationRequest, ListBlobsOperationResult,
 };
 pub use put_blob::{
-    PutBlobOperation, PutBlobOperationOutcome, PutBlobOperationRequest, PutBlobOperationResult,
+    PutBlobArchiveWriter, PutBlobOperation, PutBlobOperationOutcome, PutBlobOperationRequest,
+    PutBlobOperationResult,
 };
 pub use read_blob::{
     ReadBlobOperation, ReadBlobOperationOutcome, ReadBlobOperationRequest, ReadBlobOperationResult,

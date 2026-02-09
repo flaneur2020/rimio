@@ -1,9 +1,10 @@
-use crate::config::RuntimeConfig;
+use crate::config::{ArchiveConfig, RuntimeConfig};
 use amberio_core::{
     AmberError, ClusterClient, Coordinator, DeleteBlobOperation, HealHeadsOperation,
     HealRepairOperation, HealSlotletsOperation, InternalGetHeadOperation, InternalGetPartOperation,
     InternalPutHeadOperation, InternalPutPartOperation, ListBlobsOperation, Node, NodeInfo,
-    PartStore, PutBlobOperation, ReadBlobOperation, Registry, Result,
+    PartStore, PutBlobArchiveWriter, PutBlobOperation, ReadBlobOperation, RedisArchiveStore,
+    Registry, Result,
 };
 use axum::{
     Json, Router,
@@ -81,12 +82,14 @@ pub async fn run_server(config: RuntimeConfig, registry: Arc<dyn Registry>) -> R
 
     let coordinator = Arc::new(Coordinator::new(config.replication.min_write_replicas));
     let cluster_client = Arc::new(ClusterClient::new(registry.clone()));
+    let archive_writer = build_archive_writer(config.archive.as_ref())?;
 
     let put_blob_operation = Arc::new(PutBlobOperation::new(
         slot_manager.clone(),
         part_store.clone(),
         coordinator.clone(),
         cluster_client.clone(),
+        archive_writer,
     ));
     let read_blob_operation = Arc::new(ReadBlobOperation::new(
         slot_manager.clone(),
@@ -192,6 +195,34 @@ pub async fn run_server(config: RuntimeConfig, registry: Arc<dyn Registry>) -> R
         .map_err(|error| AmberError::Http(error.to_string()))?;
 
     Ok(())
+}
+
+fn build_archive_writer(config: Option<&ArchiveConfig>) -> Result<Option<PutBlobArchiveWriter>> {
+    let Some(config) = config else {
+        return Ok(None);
+    };
+
+    if config.archive_type.eq_ignore_ascii_case("redis") {
+        let redis = config.redis.as_ref().ok_or_else(|| {
+            AmberError::Config("archive.redis is required when archive_type=redis".to_string())
+        })?;
+
+        let store = Arc::new(RedisArchiveStore::new(redis.url.as_str())?);
+        return Ok(Some(PutBlobArchiveWriter::new(
+            store,
+            redis.key_prefix.clone(),
+        )));
+    }
+
+    if config.archive_type.eq_ignore_ascii_case("s3") {
+        tracing::warn!("archive_type=s3 is configured but write-through is not implemented yet");
+        return Ok(None);
+    }
+
+    Err(AmberError::Config(format!(
+        "unsupported archive_type for runtime: {}",
+        config.archive_type
+    )))
 }
 
 pub(crate) async fn register_local_node(state: &ServerState) -> Result<()> {

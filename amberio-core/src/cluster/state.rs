@@ -135,73 +135,92 @@ async fn run_optional_init_scan(
     let archive_store: Box<dyn ArchiveStore> =
         Box::new(RedisArchiveStore::new(redis.url.as_str())?);
 
-    let raw_entries = archive_store.list_blobs(&redis.list_key).await?;
-
-    if raw_entries.is_empty() {
-        tracing::info!(
-            "init_scan enabled but archive list '{}' is empty",
-            redis.list_key
-        );
-        return Ok(());
-    }
-
+    let page_size = redis.page_size.max(1);
+    let mut cursor: Option<String> = None;
     let mut imported = 0usize;
-    for raw in raw_entries {
-        let entry: ClusterInitScanEntry = serde_json::from_str(&raw).map_err(|error| {
-            AmberError::Config(format!("invalid init_scan entry JSON: {} ({})", raw, error))
-        })?;
 
-        let normalized_path = normalize_blob_path(&entry.path)?;
-        let slot_id = slot_for_key(&normalized_path, state.replication.total_slots);
+    loop {
+        let page = archive_store
+            .list_blobs_page(&redis.list_key, cursor.as_deref(), page_size)
+            .await?;
 
-        if !slot_manager.has_slot(slot_id).await {
-            slot_manager.init_slot(slot_id).await?;
+        if page.entries.is_empty() {
+            if imported == 0 {
+                tracing::info!(
+                    "init_scan enabled but archive list '{}' is empty",
+                    redis.list_key
+                );
+            }
+            break;
         }
 
-        let slot = slot_manager.get_slot(slot_id).await?;
-        let metadata_store = MetadataStore::new(slot)?;
-        let generation = metadata_store.next_generation(&normalized_path)?;
+        for raw in page.entries {
+            let entry: ClusterInitScanEntry = serde_json::from_str(&raw).map_err(|error| {
+                AmberError::Config(format!("invalid init_scan entry JSON: {} ({})", raw, error))
+            })?;
 
-        let part_size = entry.part_size.max(1);
-        let part_count = if entry.size_bytes == 0 {
-            0
-        } else {
-            entry.size_bytes.div_ceil(part_size) as u32
-        };
+            let normalized_path = normalize_blob_path(&entry.path)?;
+            let slot_id = slot_for_key(&normalized_path, state.replication.total_slots);
 
-        let updated_at = entry
-            .updated_at
-            .as_deref()
-            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&Utc))
-            .unwrap_or_else(Utc::now);
+            if !slot_manager.has_slot(slot_id).await {
+                slot_manager.init_slot(slot_id).await?;
+            }
 
-        let meta = BlobMeta {
-            path: normalized_path.clone(),
-            slot_id,
-            generation,
-            version: generation,
-            size_bytes: entry.size_bytes,
-            etag: entry.etag.clone(),
-            part_size,
-            part_count,
-            part_index_state: PartIndexState::None,
-            archive_url: Some(entry.archive_url.clone()),
-            updated_at,
-        };
+            let slot = slot_manager.get_slot(slot_id).await?;
+            let metadata_store = MetadataStore::new(slot)?;
+            let generation = metadata_store.next_generation(&normalized_path)?;
 
-        let applied = metadata_store.upsert_meta(&meta)?;
-        if applied {
-            imported += 1;
+            let part_size = entry.part_size.max(1);
+            let part_count = if entry.size_bytes == 0 {
+                0
+            } else {
+                entry.size_bytes.div_ceil(part_size) as u32
+            };
+
+            let updated_at = entry
+                .updated_at
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&Utc))
+                .unwrap_or_else(Utc::now);
+
+            let meta = BlobMeta {
+                path: normalized_path.clone(),
+                slot_id,
+                generation,
+                version: generation,
+                size_bytes: entry.size_bytes,
+                etag: entry.etag.clone(),
+                part_size,
+                part_count,
+                part_index_state: PartIndexState::None,
+                archive_url: Some(entry.archive_url.clone()),
+                updated_at,
+            };
+
+            let applied = metadata_store.upsert_meta(&meta)?;
+            if applied {
+                imported += 1;
+            }
+
+            tracing::info!(
+                "init_scan imported path={} slot={} generation={} applied={}",
+                normalized_path,
+                slot_id,
+                generation,
+                applied
+            );
         }
 
-        tracing::info!(
-            "init_scan imported path={} slot={} generation={} applied={}",
-            normalized_path,
-            slot_id,
-            generation,
-            applied
-        );
+        match page.next_cursor {
+            Some(next_cursor) => {
+                if cursor.as_deref() == Some(next_cursor.as_str()) {
+                    break;
+                }
+                cursor = Some(next_cursor);
+            }
+            None => break,
+        }
     }
 
     tracing::info!("init_scan imported {} objects", imported);

@@ -1,10 +1,40 @@
 use crate::{
-    AmberError, BlobMeta, ClusterClient, Coordinator, MetadataStore, PART_SIZE, PartIndexState,
-    PartStore, ReplicatedPart, Result, SlotManager, compute_hash,
+    AmberError, ArchiveStore, BlobMeta, ClusterClient, Coordinator, MetadataStore, PART_SIZE,
+    PartIndexState, PartStore, ReplicatedPart, Result, SlotManager, compute_hash,
 };
 use bytes::Bytes;
 use chrono::Utc;
 use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct PutBlobArchiveWriter {
+    store: Arc<dyn ArchiveStore>,
+    key_prefix: String,
+}
+
+impl PutBlobArchiveWriter {
+    pub fn new(store: Arc<dyn ArchiveStore>, key_prefix: impl Into<String>) -> Self {
+        Self {
+            store,
+            key_prefix: key_prefix.into(),
+        }
+    }
+
+    fn object_key_for(&self, path: &str, generation: i64) -> String {
+        let prefix = self.key_prefix.trim_matches('/');
+        if prefix.is_empty() {
+            format!("{}/g.{}", path, generation)
+        } else {
+            format!("{}/{}/g.{}", prefix, path, generation)
+        }
+    }
+
+    pub async fn write_blob(&self, path: &str, generation: i64, body: &[u8]) -> Result<String> {
+        let object_key = self.object_key_for(path, generation);
+        self.store.write_blob(&object_key, body).await?;
+        Ok(self.store.archive_url_for_key(&object_key))
+    }
+}
 
 #[derive(Clone)]
 pub struct PutBlobOperation {
@@ -12,6 +42,7 @@ pub struct PutBlobOperation {
     part_store: Arc<PartStore>,
     coordinator: Arc<Coordinator>,
     cluster_client: Arc<ClusterClient>,
+    archive_writer: Option<PutBlobArchiveWriter>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,12 +75,14 @@ impl PutBlobOperation {
         part_store: Arc<PartStore>,
         coordinator: Arc<Coordinator>,
         cluster_client: Arc<ClusterClient>,
+        archive_writer: Option<PutBlobArchiveWriter>,
     ) -> Self {
         Self {
             slot_manager,
             part_store,
             coordinator,
             cluster_client,
+            archive_writer,
         }
     }
 
@@ -117,6 +150,11 @@ impl PutBlobOperation {
             body.len().div_ceil(PART_SIZE) as u32
         };
 
+        let archive_url = match &self.archive_writer {
+            Some(writer) => Some(writer.write_blob(&path, generation, body.as_ref()).await?),
+            None => None,
+        };
+
         let meta = BlobMeta {
             path: path.clone(),
             slot_id,
@@ -127,7 +165,7 @@ impl PutBlobOperation {
             part_size: PART_SIZE as u64,
             part_count,
             part_index_state: PartIndexState::Complete,
-            archive_url: None,
+            archive_url,
             updated_at: Utc::now(),
         };
 

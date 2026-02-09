@@ -57,6 +57,7 @@ pub struct ClusterReplicationConfig {
 pub struct ClusterArchiveConfig {
     pub archive_type: String,
     pub s3: Option<ClusterArchiveS3Config>,
+    pub redis: Option<ClusterArchiveRedisConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +74,17 @@ pub struct ClusterArchiveS3Credentials {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterArchiveRedisConfig {
+    pub url: String,
+    #[serde(default = "default_archive_redis_key_prefix")]
+    pub key_prefix: String,
+}
+
+fn default_archive_redis_key_prefix() -> String {
+    "amberio:archive".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterInitScanConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -83,6 +95,12 @@ pub struct ClusterInitScanConfig {
 pub struct ClusterInitScanRedisConfig {
     pub url: String,
     pub list_key: String,
+    #[serde(default = "default_init_scan_page_size")]
+    pub page_size: usize,
+}
+
+fn default_init_scan_page_size() -> usize {
+    500
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

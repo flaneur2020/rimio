@@ -6,7 +6,10 @@ pub mod archive_store;
 pub mod metadata_store;
 pub mod part_store;
 
-pub use archive_store::{ArchiveStore, RedisArchiveStore};
+pub use archive_store::{
+    ArchiveListPage, ArchiveStore, RedisArchiveStore, parse_redis_archive_url,
+    read_archive_range_bytes,
+};
 pub use metadata_store::{
     BlobHead, BlobMeta, HeadKind, MetadataStore, PartEntry, PartIndexState, TombstoneMeta,
 };

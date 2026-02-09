@@ -1,7 +1,8 @@
 use amberio_core::{
-    AmberError, ClusterArchiveConfig, ClusterArchiveS3Config, ClusterArchiveS3Credentials,
-    ClusterDiskConfig, ClusterInitRequest, ClusterInitScanConfig, ClusterInitScanRedisConfig,
-    ClusterNodeConfig, ClusterReplicationConfig, ClusterState, RegistryBuilder, Result,
+    AmberError, ClusterArchiveConfig, ClusterArchiveRedisConfig, ClusterArchiveS3Config,
+    ClusterArchiveS3Credentials, ClusterDiskConfig, ClusterInitRequest, ClusterInitScanConfig,
+    ClusterInitScanRedisConfig, ClusterNodeConfig, ClusterReplicationConfig, ClusterState,
+    RegistryBuilder, Result,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -98,6 +99,18 @@ fn default_redis_pool_size() -> usize {
 pub struct ArchiveConfig {
     pub archive_type: String,
     pub s3: Option<S3Config>,
+    pub redis: Option<ArchiveRedisConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchiveRedisConfig {
+    pub url: String,
+    #[serde(default = "default_archive_redis_key_prefix")]
+    pub key_prefix: String,
+}
+
+fn default_archive_redis_key_prefix() -> String {
+    "amberio:archive".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +152,12 @@ pub struct InitScanConfig {
 pub struct InitScanRedisConfig {
     pub url: String,
     pub list_key: String,
+    #[serde(default = "default_init_scan_page_size")]
+    pub page_size: usize,
+}
+
+fn default_init_scan_page_size() -> usize {
+    500
 }
 
 pub type BootstrapState = ClusterState;
@@ -192,12 +211,20 @@ impl Config {
                         secret_access_key: s3.credentials.secret_access_key.clone(),
                     },
                 }),
+                redis: archive
+                    .redis
+                    .as_ref()
+                    .map(|redis| ClusterArchiveRedisConfig {
+                        url: redis.url.clone(),
+                        key_prefix: redis.key_prefix.clone(),
+                    }),
             }),
             init_scan: self.init_scan.as_ref().map(|scan| ClusterInitScanConfig {
                 enabled: scan.enabled,
                 redis: ClusterInitScanRedisConfig {
                     url: scan.redis.url.clone(),
                     list_key: scan.redis.list_key.clone(),
+                    page_size: scan.redis.page_size,
                 },
             }),
         }
@@ -269,6 +296,10 @@ impl Config {
                         access_key_id: s3.credentials.access_key_id.clone(),
                         secret_access_key: s3.credentials.secret_access_key.clone(),
                     },
+                }),
+                redis: archive.redis.as_ref().map(|redis| ArchiveRedisConfig {
+                    url: redis.url.clone(),
+                    key_prefix: redis.key_prefix.clone(),
                 }),
             }),
         })

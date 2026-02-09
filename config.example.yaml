@@ -40,13 +40,16 @@ initial_cluster:
 
 # Optional archive/cold tier backend.
 archive:
-  archive_type: s3
+  archive_type: s3 # options: s3 | redis
   s3:
     bucket: "amberio-archive"
     region: "us-east-1"
     credentials:
       access_key_id: "YOUR_ACCESS_KEY_ID"
       secret_access_key: "YOUR_SECRET_ACCESS_KEY"
+  # redis:
+  #   url: "redis://localhost:6379"
+  #   key_prefix: "amberio:archive"
 
 # Optional init-time archive scan import.
 # When enabled, this runs during initialization only.
@@ -55,3 +58,4 @@ archive:
 #   redis:
 #     url: "redis://localhost:6379"
 #     list_key: "amberio:init-scan:list"
+#     page_size: 500
