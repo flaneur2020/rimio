@@ -3,11 +3,10 @@ use super::types::{
     ClusterNodeConfig, ClusterState,
 };
 use crate::{
-    AmberError, BlobMeta, MetadataStore, PartIndexState, RegistryBuilder, Result, SlotManager,
-    slot_for_key,
+    AmberError, ArchiveStore, BlobMeta, MetadataStore, PartIndexState, RedisArchiveStore,
+    RegistryBuilder, Result, SlotManager, slot_for_key,
 };
 use chrono::Utc;
-use redis::AsyncCommands;
 
 #[derive(Clone)]
 pub struct ClusterManager {
@@ -112,13 +111,7 @@ async fn run_optional_init_scan(
         _ => return Ok(()),
     };
 
-    let redis_mock = match init_scan.redis_mock.as_ref() {
-        Some(mock) => mock,
-        None => {
-            tracing::warn!("init_scan enabled but init_scan.redis_mock is not configured");
-            return Ok(());
-        }
-    };
+    let redis = &init_scan.redis;
 
     let node = state
         .nodes
@@ -139,31 +132,15 @@ async fn run_optional_init_scan(
 
     let slot_manager = SlotManager::new(current_node.to_string(), data_dir)?;
 
-    let client = redis::Client::open(redis_mock.url.as_str()).map_err(|error| {
-        AmberError::Config(format!(
-            "init_scan redis mock connection config error: {}",
-            error
-        ))
-    })?;
+    let archive_store: Box<dyn ArchiveStore> =
+        Box::new(RedisArchiveStore::new(redis.url.as_str())?);
 
-    let mut conn = client
-        .get_multiplexed_async_connection()
-        .await
-        .map_err(|error| {
-            AmberError::Internal(format!("init_scan redis mock connection failed: {}", error))
-        })?;
-
-    let raw_entries: Vec<String> =
-        conn.lrange(&redis_mock.list_key, 0, -1)
-            .await
-            .map_err(|error| {
-                AmberError::Internal(format!("init_scan redis mock LRANGE failed: {}", error))
-            })?;
+    let raw_entries = archive_store.list_blobs(&redis.list_key).await?;
 
     if raw_entries.is_empty() {
         tracing::info!(
-            "init_scan enabled but redis list '{}' is empty",
-            redis_mock.list_key
+            "init_scan enabled but archive list '{}' is empty",
+            redis.list_key
         );
         return Ok(());
     }

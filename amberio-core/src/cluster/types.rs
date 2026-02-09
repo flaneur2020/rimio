@@ -76,11 +76,11 @@ pub struct ClusterArchiveS3Credentials {
 pub struct ClusterInitScanConfig {
     #[serde(default)]
     pub enabled: bool,
-    pub redis_mock: Option<ClusterInitScanRedisMockConfig>,
+    pub redis: ClusterInitScanRedisConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClusterInitScanRedisMockConfig {
+pub struct ClusterInitScanRedisConfig {
     pub url: String,
     pub list_key: String,
 }

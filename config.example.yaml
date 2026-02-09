@@ -52,6 +52,6 @@ archive:
 # When enabled, this runs during initialization only.
 # init_scan:
 #   enabled: true
-#   redis_mock:
+#   redis:
 #     url: "redis://localhost:6379"
 #     list_key: "amberio:init-scan:list"

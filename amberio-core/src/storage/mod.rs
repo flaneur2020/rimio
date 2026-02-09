@@ -2,9 +2,11 @@
 //!
 //! Provides filesystem part storage and metadata management.
 
+pub mod archive_store;
 pub mod metadata_store;
 pub mod part_store;
 
+pub use archive_store::{ArchiveStore, RedisArchiveStore};
 pub use metadata_store::{
     BlobHead, BlobMeta, HeadKind, MetadataStore, PartEntry, PartIndexState, TombstoneMeta,
 };

@@ -19,6 +19,6 @@ pub use slot_manager::{
     PART_SIZE, ReplicaStatus, Slot, SlotHealth, SlotInfo, SlotManager, TOTAL_SLOTS, slot_for_key,
 };
 pub use storage::{
-    BlobHead, BlobMeta, HeadKind, MetadataStore, PartEntry, PartIndexState, PartStore,
-    PutPartResult, TombstoneMeta, compute_hash, verify_hash,
+    ArchiveStore, BlobHead, BlobMeta, HeadKind, MetadataStore, PartEntry, PartIndexState,
+    PartStore, PutPartResult, RedisArchiveStore, TombstoneMeta, compute_hash, verify_hash,
 };

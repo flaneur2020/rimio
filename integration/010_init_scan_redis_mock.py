@@ -248,7 +248,7 @@ def main() -> None:
                 "    total_slots: 2048",
                 "init_scan:",
                 "  enabled: true",
-                "  redis_mock:",
+                "  redis:",
                 f'    url: "{args.redis_url}"',
                 f'    list_key: "{scan_list_key}"',
             ]

@@ -1,6 +1,6 @@
 use amberio_core::{
     AmberError, ClusterArchiveConfig, ClusterArchiveS3Config, ClusterArchiveS3Credentials,
-    ClusterDiskConfig, ClusterInitRequest, ClusterInitScanConfig, ClusterInitScanRedisMockConfig,
+    ClusterDiskConfig, ClusterInitRequest, ClusterInitScanConfig, ClusterInitScanRedisConfig,
     ClusterNodeConfig, ClusterReplicationConfig, ClusterState, RegistryBuilder, Result,
 };
 use serde::{Deserialize, Serialize};
@@ -132,11 +132,11 @@ impl Default for ReplicationConfig {
 pub struct InitScanConfig {
     #[serde(default)]
     pub enabled: bool,
-    pub redis_mock: Option<InitScanRedisMockConfig>,
+    pub redis: InitScanRedisConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitScanRedisMockConfig {
+pub struct InitScanRedisConfig {
     pub url: String,
     pub list_key: String,
 }
@@ -195,13 +195,10 @@ impl Config {
             }),
             init_scan: self.init_scan.as_ref().map(|scan| ClusterInitScanConfig {
                 enabled: scan.enabled,
-                redis_mock: scan
-                    .redis_mock
-                    .as_ref()
-                    .map(|mock| ClusterInitScanRedisMockConfig {
-                        url: mock.url.clone(),
-                        list_key: mock.list_key.clone(),
-                    }),
+                redis: ClusterInitScanRedisConfig {
+                    url: scan.redis.url.clone(),
+                    list_key: scan.redis.list_key.clone(),
+                },
             }),
         }
     }
