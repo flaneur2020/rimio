@@ -1,14 +1,12 @@
 name: Integration
 
 on:
+  push:
+    branches:
+      - master
   pull_request:
-  workflow_dispatch:
-    inputs:
-      run_s3_integration:
-        description: "Run optional 012 S3/MinIO integration case"
-        required: false
-        default: false
-        type: boolean
+    branches:
+      - master
 
 concurrency:
   group: integration-${{ github.workflow }}-${{ github.ref }}
@@ -64,7 +62,7 @@ jobs:
             --redis-url redis://127.0.0.1:6379
 
       - name: Start MinIO for optional S3 case
-        if: ${{ vars.AMBERIO_ENABLE_S3_IT == '1' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_s3_integration == 'true') }}
+        if: ${{ vars.AMBERIO_ENABLE_S3_IT == '1' }}
         run: |
           docker run -d --name amberio-minio \
             -p 9000:9000 \
@@ -87,7 +85,7 @@ jobs:
           '
 
       - name: Run optional S3 integration case (012)
-        if: ${{ vars.AMBERIO_ENABLE_S3_IT == '1' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_s3_integration == 'true') }}
+        if: ${{ vars.AMBERIO_ENABLE_S3_IT == '1' }}
         env:
           AMBERIO_REDIS_URL: redis://127.0.0.1:6379
           AMBERIO_S3_ENDPOINT: http://127.0.0.1:9000
