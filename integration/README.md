@@ -56,6 +56,8 @@ uv run --project integration integration/008_tla_trace_check.py \
 ## S3 gateway case
 
 - `013_s3_gateway_basic.py`: validates S3-compatible `put/get/head/list/delete` via `boto3`, and checks multipart currently returns expected not-implemented style error.
+- `014_s3_get_object_compat.py`: validates GetObject compatibility fields (range/partNumber/conditionals/response overrides) and explicit `NotImplemented` behavior for `versionId` and SSE-C.
+- `015_s3_put_list_compat.py`: validates PutObject/ListObjectsV2 compatibility for conditional put, Content-MD5, delimiter/start-after listing, pagination, and staged `NotImplemented` behavior for unsupported options.
 
 ## Optional MinIO case (012)
 
