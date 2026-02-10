@@ -584,7 +584,7 @@ def build_case_parser(case_id: str, description: str) -> argparse.ArgumentParser
     )
     parser.add_argument(
         "--api-prefix",
-        default=os.getenv("AMBERIO_API_PREFIX", "/api/v1"),
+        default=os.getenv("AMBERIO_API_PREFIX", "/_/api/v1"),
         help="External API prefix",
     )
     parser.add_argument(

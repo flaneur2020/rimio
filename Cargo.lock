@@ -56,11 +56,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "amberio-s3-gateway"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum 0.7.9",
+ "base64 0.22.1",
+ "bytes",
+]
+
+[[package]]
 name = "amberio-server"
 version = "0.1.0"
 dependencies = [
  "amberio-core",
+ "amberio-s3-gateway",
  "anyhow",
+ "async-trait",
  "axum 0.7.9",
  "bytes",
  "chrono",

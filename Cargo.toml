@@ -1,5 +1,5 @@
 [workspace]
-members = ["amberio-core", "amberio-server"]
+members = ["amberio-core", "amberio-server", "amberio-s3-gateway"]
 resolver = "2"
 
 [workspace.package]

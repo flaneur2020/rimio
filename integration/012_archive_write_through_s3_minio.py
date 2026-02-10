@@ -70,7 +70,7 @@ def wait_for_health(port: int, timeout_seconds: float = 25.0) -> None:
         if response.status == 200:
             return
 
-        response = http_request("GET", f"http://127.0.0.1:{port}/api/v1/healthz", timeout=1.5)
+        response = http_request("GET", f"http://127.0.0.1:{port}/_/api/v1/healthz", timeout=1.5)
         if response.status == 200:
             return
 
@@ -212,7 +212,7 @@ def main() -> None:
 
         put_response = http_request(
             "PUT",
-            f"http://127.0.0.1:{port}/api/v1/blobs/{encoded_path}",
+            f"http://127.0.0.1:{port}/_/api/v1/blobs/{encoded_path}",
             body=body,
             headers={"content-type": "application/octet-stream"},
             timeout=12.0,
@@ -225,7 +225,7 @@ def main() -> None:
 
         resolve_response = http_request(
             "GET",
-            f"http://127.0.0.1:{port}/api/v1/slots/resolve?path={quote_blob_path(blob_path)}",
+            f"http://127.0.0.1:{port}/_/api/v1/slots/resolve?path={quote_blob_path(blob_path)}",
             timeout=10.0,
         )
         expect_status(resolve_response.status, {200}, "resolve slot")
@@ -263,7 +263,7 @@ def main() -> None:
 
         get_response = http_request(
             "GET",
-            f"http://127.0.0.1:{port}/api/v1/blobs/{encoded_path}",
+            f"http://127.0.0.1:{port}/_/api/v1/blobs/{encoded_path}",
             timeout=14.0,
         )
         expect_status(get_response.status, {200}, "GET blob with local parts removed")

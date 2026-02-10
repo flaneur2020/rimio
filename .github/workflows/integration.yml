@@ -44,6 +44,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Install protoc
         run: |
           sudo apt-get update
@@ -57,7 +60,7 @@ jobs:
           AMBERIO_REDIS_URL: redis://127.0.0.1:6379
           AMBERIO_ENABLE_S3_IT: "0"
         run: |
-          python3 integration/run_all.py \
+          uv run --project integration integration/run_all.py \
             --binary target/release/amberio \
             --redis-url redis://127.0.0.1:6379
 
@@ -94,7 +97,7 @@ jobs:
           AMBERIO_S3_ACCESS_KEY_ID: minioadmin
           AMBERIO_S3_SECRET_ACCESS_KEY: minioadmin
         run: |
-          python3 integration/012_archive_write_through_s3_minio.py \
+          uv run --project integration integration/012_archive_write_through_s3_minio.py \
             --binary target/release/amberio \
             --redis-url redis://127.0.0.1:6379 \
             --s3-endpoint http://127.0.0.1:9000 \

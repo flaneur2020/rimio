@@ -1,0 +1,15 @@
+[package]
+name = "amberio-s3-gateway"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+description = "S3-compatible gateway router and protocol handlers for Amberio"
+
+[dependencies]
+axum = { version = "0.7" }
+async-trait = "0.1"
+bytes = "1.5"
+base64 = "0.22"

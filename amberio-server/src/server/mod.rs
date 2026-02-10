@@ -20,6 +20,7 @@ use tokio::time::{Duration, interval};
 
 mod external;
 mod internal;
+mod s3_gateway;
 mod types;
 
 use external::{
@@ -161,12 +162,13 @@ pub async fn run_server(config: RuntimeConfig, registry: Arc<dyn Registry>) -> R
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/api/v1/healthz", get(v1_healthz))
-        .route("/api/v1/nodes", get(v1_nodes))
-        .route("/api/v1/slots/resolve", get(v1_resolve_slot))
-        .route("/api/v1/blobs", get(v1_list_blobs))
+        .route("/_/health", get(health))
+        .route("/_/api/v1/healthz", get(v1_healthz))
+        .route("/_/api/v1/nodes", get(v1_nodes))
+        .route("/_/api/v1/slots/resolve", get(v1_resolve_slot))
+        .route("/_/api/v1/blobs", get(v1_list_blobs))
         .route(
-            "/api/v1/blobs/*path",
+            "/_/api/v1/blobs/*path",
             get(v1_get_blob)
                 .head(v1_head_blob)
                 .put(v1_put_blob)
@@ -192,6 +194,7 @@ pub async fn run_server(config: RuntimeConfig, registry: Arc<dyn Registry>) -> R
             "/internal/v1/slots/:slot_id/heal/repair",
             post(v1_internal_heal_repair),
         )
+        .merge(amberio_s3_gateway::router::<ServerState>())
         .with_state(state);
 
     let listener = TcpListener::bind(&node_cfg.bind_addr).await?;

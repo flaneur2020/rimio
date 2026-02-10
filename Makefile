@@ -8,7 +8,7 @@ TLA2TOOLS_JAR ?=
 .PHONY: integration tla
 
 integration:
-	python3 integration/run_all.py \
+	uv run --project integration integration/run_all.py \
 		--binary $(BINARY) \
 		--redis-url $(REDIS_URL) \
 		--nodes $(NODES) \
@@ -22,7 +22,7 @@ tla:
 		echo "  make tla TLA2TOOLS_JAR=/path/to/tla2tools.jar"; \
 		exit 1; \
 	fi
-	python3 integration/008_tla_trace_check.py \
+	uv run --project integration integration/008_tla_trace_check.py \
 		--binary $(BINARY) \
 		--redis-url $(REDIS_URL) \
 		--nodes $(NODES) \

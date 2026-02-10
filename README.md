@@ -61,25 +61,31 @@ Notes:
 - A normal `server` start auto-runs init when state is missing.
 - `--init` runs initialization only and exits.
 
-## External API (Simplified)
+## External API (Amberio-native)
 
-- `GET /api/v1/healthz`
-- `GET /api/v1/nodes`
-- `GET /api/v1/slots/resolve?path=<blob_path>`
-- `PUT /api/v1/blobs/{path}`
-- `GET /api/v1/blobs/{path}`
-- `HEAD /api/v1/blobs/{path}`
-- `DELETE /api/v1/blobs/{path}`
-- `GET /api/v1/blobs?prefix=<p>&limit=<n>`
+- `GET /_/api/v1/healthz`
+- `GET /_/api/v1/nodes`
+- `GET /_/api/v1/slots/resolve?path=<blob_path>`
+- `PUT /_/api/v1/blobs/{path}`
+- `GET /_/api/v1/blobs/{path}`
+- `HEAD /_/api/v1/blobs/{path}`
+- `DELETE /_/api/v1/blobs/{path}`
+- `GET /_/api/v1/blobs?prefix=<p>&limit=<n>`
 
 Common request/response headers:
 - `x-amberio-write-id`
 - `x-amberio-generation`
 
+## S3-compatible API (V1)
+
+- Endpoint style: path-style S3 routes at server root
+- Covered ops: `PutObject`, `GetObject`, `HeadObject`, `DeleteObject`, `ListObjectsV2`
+- Multipart upload APIs currently return `NotImplemented`
+
 ## Integration Tests
 
 ```bash
-python3 integration/run_all.py \
+uv run --project integration integration/run_all.py \
   --binary target/release/amberio \
   --redis-url redis://127.0.0.1:6379
 ```

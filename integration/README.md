@@ -1,22 +1,33 @@
 # Amberio Integration Tests
 
-These tests are contract tests for external/internal HTTP APIs, including RFC 0002 and RFC 0003 coverage.
+These tests are contract tests for Amberio external/internal APIs and S3 gateway behavior.
 
 ## Prerequisites
 
 - Redis is running at `redis://127.0.0.1:6379` (default).
 - Amberio binary is available at `target/release/amberio`, or pass `--build-if-missing`.
+- Install `uv` (https://docs.astral.sh/uv/).
+
+## Python dependencies (uv)
+
+From repo root:
+
+```bash
+uv run --project integration integration/run_all.py --help
+```
+
+`uv` will resolve dependencies from `integration/pyproject.toml` (including `boto3`).
 
 ## Run all cases
 
 ```bash
-python3 integration/run_all.py --build-if-missing
+uv run --project integration integration/run_all.py --build-if-missing
 ```
 
 ## Run one case
 
 ```bash
-python3 integration/002_external_blob_crud.py --build-if-missing
+uv run --project integration integration/002_external_blob_crud.py --build-if-missing
 ```
 
 ## TLA+ trace case
@@ -25,16 +36,8 @@ Case `008_tla_trace_check.py` generates a real write/delete trace from a live
 cluster run and saves it as JSON. You can optionally validate this trace
 against a TLA+ replay spec with TLC.
 
-Generate trace only:
-
 ```bash
-python3 integration/008_tla_trace_check.py --build-if-missing
-```
-
-Generate trace + check with TLC:
-
-```bash
-python3 integration/008_tla_trace_check.py \
+uv run --project integration integration/008_tla_trace_check.py \
   --build-if-missing \
   --tlc-jar /path/to/tla2tools.jar
 ```
@@ -50,12 +53,18 @@ python3 integration/008_tla_trace_check.py \
 - `011_archive_write_through_redis.py`: validates archive write-through on PUT plus fallback/read-through after local part deletion.
 - `012_archive_write_through_s3_minio.py`: validates S3/MinIO write-through and fallback read-through.
 
+## S3 gateway case
+
+- `013_s3_gateway_basic.py`: validates S3-compatible `put/get/head/list/delete` via `boto3`, and checks multipart currently returns expected not-implemented style error.
+
+## Optional MinIO case (012)
+
 By default, `run_all.py` skips case `012`.
 
 Enable it with either:
 
-- `AMBERIO_ENABLE_S3_IT=1 python3 integration/run_all.py ...`
-- `python3 integration/run_all.py --include-s3 ...`
+- `AMBERIO_ENABLE_S3_IT=1 uv run --project integration integration/run_all.py ...`
+- `uv run --project integration integration/run_all.py --include-s3 ...`
 
 ## Notes
 
@@ -64,5 +73,5 @@ Enable it with either:
 - Case `012` expects a reachable S3-compatible endpoint (e.g. MinIO) with a pre-created bucket.
 - Use `--keep-artifacts` to keep generated configs/logs for debugging.
 - API prefixes default to:
-  - External: `/api/v1`
+  - External: `/_/api/v1`
   - Internal: `/internal/v1`

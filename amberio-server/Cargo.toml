@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 amberio-core = { path = "../amberio-core" }
+amberio-s3-gateway = { path = "../amberio-s3-gateway" }
 
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.7", features = ["multipart"] }
@@ -32,3 +33,4 @@ bytes = "1.5"
 ulid = "1.1"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+async-trait = "0.1"

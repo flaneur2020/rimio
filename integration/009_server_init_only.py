@@ -65,7 +65,7 @@ def wait_for_health(port: int, timeout_seconds: float = 20.0) -> None:
         if response.status == 200:
             return
 
-        response = http_request("GET", f"http://127.0.0.1:{port}/api/v1/healthz", timeout=1.5)
+        response = http_request("GET", f"http://127.0.0.1:{port}/_/api/v1/healthz", timeout=1.5)
         if response.status == 200:
             return
 
@@ -280,7 +280,7 @@ def main() -> None:
                 candidate = f"cases/009/first-wins-{index}/{uuid.uuid4().hex}.txt"
                 response = http_request(
                     "GET",
-                    f"http://127.0.0.1:{node2_port}/api/v1/slots/resolve?path={candidate}",
+                    f"http://127.0.0.1:{node2_port}/_/api/v1/slots/resolve?path={candidate}",
                     timeout=2.0,
                 )
                 if response.status != 200:

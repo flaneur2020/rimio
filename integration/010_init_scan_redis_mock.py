@@ -138,7 +138,7 @@ def wait_for_health(port: int, timeout_seconds: float = 25.0) -> None:
         status, _, _ = http_request("GET", f"http://127.0.0.1:{port}/health", timeout=1.5)
         if status == 200:
             return
-        status, _, _ = http_request("GET", f"http://127.0.0.1:{port}/api/v1/healthz", timeout=1.5)
+        status, _, _ = http_request("GET", f"http://127.0.0.1:{port}/_/api/v1/healthz", timeout=1.5)
         if status == 200:
             return
         time.sleep(0.25)
@@ -291,7 +291,7 @@ def main() -> None:
 
         encoded = parse.quote(blob_path, safe="/")
         get_status, get_headers, get_body = http_request(
-            "GET", f"http://127.0.0.1:{port}/api/v1/blobs/{encoded}", timeout=10.0
+            "GET", f"http://127.0.0.1:{port}/_/api/v1/blobs/{encoded}", timeout=10.0
         )
         get_response = type("Resp", (), {"status": get_status, "headers": get_headers, "body": get_body})
         expect_status(get_response.status, {200}, "GET imported blob after init_scan")
@@ -302,7 +302,7 @@ def main() -> None:
 
         list_status, list_headers, list_body = http_request(
             "GET",
-            f"http://127.0.0.1:{port}/api/v1/blobs?prefix=cases/010/&limit=50",
+            f"http://127.0.0.1:{port}/_/api/v1/blobs?prefix=cases/010/&limit=50",
             timeout=10.0,
         )
         list_response = type(
