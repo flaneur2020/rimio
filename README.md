@@ -1,6 +1,8 @@
 # Rimio
 
-Rimio is a lightweight write-back cache layer for object storage designed for small on-premises or edge clusters.
+Rimio is a lightweight write-back cache that accelerates object-native systems (SlateDB, NeonDB, Greptime, Databend, WarpStream, Thanos, etc.) for edge and on-prem clusters with minimal operational overhead.
+
+It bridges the gap between local SSD performance and cloud reliability.
 
 ```
 +-------------------------------------------------------+       +------------------------+
@@ -18,17 +20,17 @@ Rimio is a lightweight write-back cache layer for object storage designed for sm
 
 It features:
 
-- Works with S3-based systems (SlateDB, Greptime, Databend, WarpStream, Thanos, etc.) for on-prem and edge deployments.
 - Simple setup and configuration.
+- Durability on your cloud, local SSD speed for read/write.
 - Minimal architecture with low operational overhead.
 - TLA+ backed design with extensive property-based testing.
 
-Non-goals (important):
+Non-goals (important!):
 
 - No full AWS S3 API compatibility (basic CRUD only).
 - No full AWS IAM/ACL support.
 - No multi-tenant support.
-- Not built for dynamic cluster autoscaling or rebalancing (node addition and removal are not supported).
+- Not built for dynamic cluster autoscaling or rebalancing (dynamic node addition and removal are not supported by design).
 
 ## Quick guide: bootstrap a local cluster
 
