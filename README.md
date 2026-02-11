@@ -1,6 +1,6 @@
 # Rimio
 
-Rimio is a lightweight write-back cache that accelerates object-native systems (SlateDB, NeonDB, Greptime, Databend, WarpStream, Thanos, etc.) for edge and on-prem clusters with minimal operational overhead.
+Rimio is a lightweight write-back cache that accelerates object-native systems (SlateDB, ZeroFS, JuiceFS, NeonDB, Greptime, Databend, WarpStream, Thanos, etc.) for edge and on-prem clusters with minimal operational overhead.
 
 It bridges the gap between local SSD performance and cloud reliability.
 
