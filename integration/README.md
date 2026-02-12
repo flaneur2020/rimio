@@ -59,6 +59,22 @@ uv run --project integration integration/008_tla_trace_check.py \
 - `014_s3_get_object_compat.py`: validates GetObject compatibility fields (range/partNumber/conditionals/response overrides) and explicit `NotImplemented` behavior for `versionId` and SSE-C.
 - `015_s3_put_list_compat.py`: validates PutObject/ListObjectsV2 compatibility for conditional put, Content-MD5, delimiter/start-after listing, pagination, and staged `NotImplemented` behavior for unsupported options.
 
+## RFC0008 gated cases (016-019)
+
+These cases define contract placeholders for the planned RFC0008 start/join + gossip flow:
+
+- `016_rfc0008_join_rejects_local_conf_dependence.py`
+- `017_rfc0008_cluster_url_parse_contract.py`
+- `018_rfc0008_write_gate_api_contract.py`
+- `019_rfc0008_force_takeover_contract.py`
+
+They are excluded from `run_all.py` by default until features land.
+
+Enable with either:
+
+- `RIMIO_ENABLE_RFC0008_IT=1 uv run --project integration integration/run_all.py ...`
+- `uv run --project integration integration/run_all.py --include-rfc0008 ...`
+
 ## Optional MinIO case (012)
 
 By default, `run_all.py` skips case `012`.

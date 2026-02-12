@@ -13,17 +13,22 @@ from pathlib import Path
 INTEGRATION_DIR = Path(__file__).resolve().parent
 
 
-def discover_cases(*, include_s3: bool) -> list[Path]:
+RFC0008_PREFIXES = ("016_", "017_", "018_", "019_")
+
+
+def discover_cases(*, include_s3: bool, include_rfc0008: bool) -> list[Path]:
     cases = sorted(
         path
         for path in INTEGRATION_DIR.glob("[0-9][0-9][0-9]_*.py")
         if path.name != "run_all.py"
     )
 
-    if include_s3:
-        return cases
+    filtered = cases if include_s3 else [case for case in cases if not case.name.startswith("012_")]
 
-    return [case for case in cases if not case.name.startswith("012_")]
+    if include_rfc0008:
+        return filtered
+
+    return [case for case in filtered if not case.name.startswith(RFC0008_PREFIXES)]
 
 
 def _truthy(value: str | None) -> bool:
@@ -54,10 +59,16 @@ def main() -> None:
         action="store_true",
         help="Include 012 S3/MinIO integration case",
     )
+    parser.add_argument(
+        "--include-rfc0008",
+        action="store_true",
+        help="Include 016-019 RFC0008 start/join/gossip integration cases",
+    )
     args = parser.parse_args()
 
     include_s3 = args.include_s3 or _truthy(os.getenv("RIMIO_ENABLE_S3_IT"))
-    cases = discover_cases(include_s3=include_s3)
+    include_rfc0008 = args.include_rfc0008 or _truthy(os.getenv("RIMIO_ENABLE_RFC0008_IT"))
+    cases = discover_cases(include_s3=include_s3, include_rfc0008=include_rfc0008)
     if args.case_prefix:
         cases = [case for case in cases if case.name.startswith(args.case_prefix)]
 
