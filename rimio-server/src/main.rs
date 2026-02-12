@@ -49,7 +49,7 @@ enum Commands {
     },
     /// Join existing cluster from registry URL
     Join {
-        /// Registry URL, e.g. cluster://seed1:8400,seed2:8400
+        /// Registry URL, e.g. cluster://seed1:8400,seed2:8400 or redis://127.0.0.1:6379
         registry_url: String,
 
         /// Current node id
@@ -79,53 +79,180 @@ struct JoinInvocation {
     force_takeover: bool,
 }
 
-fn parse_cluster_registry_url(url: &str) -> std::result::Result<String, String> {
-    let trimmed = url.trim();
-    if trimmed.is_empty() {
-        return Err("registry_url cannot be empty".to_string());
-    }
+#[derive(Debug, Clone)]
+enum JoinRegistryTarget {
+    Gossip { seeds: Vec<String> },
+    Redis { url: String },
+    Etcd { endpoints: Vec<String> },
+}
 
-    let prefix = "cluster://";
-    if !trimmed.starts_with(prefix) {
+fn parse_host_port_entry(value: &str, field: &str) -> std::result::Result<String, String> {
+    let trimmed = value.trim();
+    let (host_raw, port_raw) = trimmed
+        .rsplit_once(':')
+        .ok_or_else(|| format!("invalid {} '{}': expected host:port", field, trimmed))?;
+
+    let host = host_raw.trim();
+    let port = port_raw.trim();
+    if host.is_empty() || port.is_empty() {
         return Err(format!(
-            "invalid registry_url '{}': expected cluster://host:port[,host:port]",
-            trimmed
+            "invalid {} '{}': expected host:port",
+            field, trimmed
         ));
     }
 
-    let seeds_raw = &trimmed[prefix.len()..];
-    if seeds_raw.trim().is_empty() {
+    if host.contains(':') && !(host.starts_with('[') && host.ends_with(']')) {
+        return Err(format!(
+            "invalid {} '{}': expected host:port",
+            field, trimmed
+        ));
+    }
+
+    let parsed_port = port
+        .parse::<u16>()
+        .map_err(|_| format!("invalid {} '{}': port must be u16", field, trimmed))?;
+
+    Ok(format!("{}:{}", host, parsed_port))
+}
+
+fn parse_cluster_seeds(raw: &str) -> std::result::Result<Vec<String>, String> {
+    if raw.trim().is_empty() {
         return Err("registry_url must include at least one seed host:port".to_string());
     }
 
     let mut parsed_seeds = Vec::new();
-    for raw in seeds_raw.split(',') {
-        let seed = raw.trim();
+    for token in raw.split(',') {
+        let seed = token.trim();
         if seed.is_empty() {
             continue;
         }
 
-        let mut parts = seed.split(':');
-        let host = parts.next().unwrap_or_default().trim();
-        let port = parts.next().unwrap_or_default().trim();
-        let extra = parts.next();
-
-        if host.is_empty() || port.is_empty() || extra.is_some() {
-            return Err(format!("invalid seed '{}': expected host:port", seed));
-        }
-
-        if port.parse::<u16>().is_err() {
-            return Err(format!("invalid seed '{}': port must be u16", seed));
-        }
-
-        parsed_seeds.push(format!("{}:{}", host, port));
+        parsed_seeds.push(parse_host_port_entry(seed, "seed")?);
     }
 
     if parsed_seeds.is_empty() {
         return Err("registry_url has no valid seeds".to_string());
     }
 
-    Ok(parsed_seeds.join(","))
+    Ok(parsed_seeds)
+}
+
+fn parse_etcd_endpoints(raw: &str) -> std::result::Result<Vec<String>, String> {
+    if raw.trim().is_empty() {
+        return Err("registry_url must include at least one etcd endpoint host:port".to_string());
+    }
+
+    let mut parsed_endpoints = Vec::new();
+    for token in raw.split(',') {
+        let endpoint = token.trim();
+        if endpoint.is_empty() {
+            continue;
+        }
+
+        parsed_endpoints.push(parse_host_port_entry(endpoint, "etcd endpoint")?);
+    }
+
+    if parsed_endpoints.is_empty() {
+        return Err("registry_url has no valid etcd endpoints".to_string());
+    }
+
+    Ok(parsed_endpoints)
+}
+
+fn derive_default_gossip_bind_addr(seeds: &[String]) -> std::result::Result<String, String> {
+    let first_seed = seeds
+        .first()
+        .ok_or_else(|| "gossip join requires at least one seed".to_string())?;
+
+    let (host_raw, port_raw) = first_seed
+        .rsplit_once(':')
+        .ok_or_else(|| format!("invalid seed '{}': expected host:port", first_seed))?;
+    let host = host_raw.trim();
+    let port = port_raw.trim();
+
+    if host.starts_with('[') {
+        Ok(format!("[::]:{}", port))
+    } else {
+        Ok(format!("0.0.0.0:{}", port))
+    }
+}
+
+fn parse_registry_url(url: &str) -> std::result::Result<JoinRegistryTarget, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("registry_url cannot be empty".to_string());
+    }
+
+    if let Some(seeds_raw) = trimmed.strip_prefix("cluster://") {
+        return Ok(JoinRegistryTarget::Gossip {
+            seeds: parse_cluster_seeds(seeds_raw)?,
+        });
+    }
+
+    if trimmed.starts_with("redis://") {
+        if trimmed.len() <= "redis://".len() {
+            return Err("redis registry_url must include host:port".to_string());
+        }
+
+        return Ok(JoinRegistryTarget::Redis {
+            url: trimmed.to_string(),
+        });
+    }
+
+    if let Some(endpoints_raw) = trimmed.strip_prefix("etcd://") {
+        return Ok(JoinRegistryTarget::Etcd {
+            endpoints: parse_etcd_endpoints(endpoints_raw)?,
+        });
+    }
+
+    Err(format!(
+        "invalid registry_url '{}': expected cluster://host:port[,host:port], redis://..., or etcd://host:port[,host:port]",
+        trimmed
+    ))
+}
+
+fn registry_config_for_join_target(
+    target: &JoinRegistryTarget,
+) -> std::result::Result<config::RegistryConfig, String> {
+    match target {
+        JoinRegistryTarget::Gossip { seeds } => {
+            let bind_addr = derive_default_gossip_bind_addr(seeds)?;
+            Ok(config::RegistryConfig {
+                backend: config::RegistryBackend::Gossip,
+                namespace: Some("default".to_string()),
+                etcd: None,
+                redis: None,
+                gossip: Some(config::GossipConfig {
+                    bind_addr,
+                    advertise_addr: None,
+                    seeds: seeds.clone(),
+                }),
+            })
+        }
+        JoinRegistryTarget::Redis { url } => Ok(config::RegistryConfig {
+            backend: config::RegistryBackend::Redis,
+            namespace: Some("default".to_string()),
+            etcd: None,
+            redis: Some(config::RedisConfig {
+                url: url.clone(),
+                pool_size: 8,
+            }),
+            gossip: None,
+        }),
+        JoinRegistryTarget::Etcd { endpoints } => Ok(config::RegistryConfig {
+            backend: config::RegistryBackend::Etcd,
+            namespace: Some("default".to_string()),
+            etcd: Some(config::EtcdConfig {
+                endpoints: endpoints.clone(),
+            }),
+            redis: None,
+            gossip: None,
+        }),
+    }
+}
+
+fn should_check_active_node_conflict(target: &JoinRegistryTarget) -> bool {
+    !matches!(target, JoinRegistryTarget::Gossip { .. })
 }
 
 fn apply_join_overrides(
@@ -143,7 +270,12 @@ fn apply_join_overrides(
         .nodes
         .iter_mut()
         .find(|node| node.node_id == join.node)
-        .ok_or_else(|| format!("node '{}' not found in config initial_cluster.nodes", join.node))?;
+        .ok_or_else(|| {
+            format!(
+                "node '{}' not found in config initial_cluster.nodes",
+                join.node
+            )
+        })?;
 
     if let Some(listen) = &join.listen {
         if !node_cfg.bind_addr.trim().is_empty() && node_cfg.bind_addr != *listen {
@@ -252,7 +384,7 @@ async fn run_with_config(cfg: Config, init_only: bool) {
 }
 
 async fn run_join(join: JoinInvocation) {
-    let normalized_registry_url = match parse_cluster_registry_url(&join.registry_url) {
+    let registry_target = match parse_registry_url(&join.registry_url) {
         Ok(value) => value,
         Err(message) => {
             tracing::error!("Invalid registry URL: {}", message);
@@ -260,24 +392,17 @@ async fn run_join(join: JoinInvocation) {
         }
     };
 
-    let first_seed = normalized_registry_url
-        .split(',')
-        .next()
-        .map(str::trim)
-        .unwrap_or_default();
+    let join_registry_config = match registry_config_for_join_target(&registry_target) {
+        Ok(config) => config,
+        Err(message) => {
+            tracing::error!("Invalid registry URL: {}", message);
+            std::process::exit(2);
+        }
+    };
 
     let mut cfg = Config {
         current_node: join.node.clone(),
-        registry: config::RegistryConfig {
-            backend: config::RegistryBackend::Redis,
-            namespace: Some("default".to_string()),
-            etcd: None,
-            redis: Some(config::RedisConfig {
-                url: format!("redis://{}", first_seed),
-                pool_size: 8,
-            }),
-            gossip: None,
-        },
+        registry: join_registry_config,
         initial_cluster: config::InitialClusterConfig {
             nodes: vec![config::InitialNodeConfig {
                 node_id: join.node.clone(),
@@ -345,23 +470,29 @@ async fn run_join(join: JoinInvocation) {
         min_write_replicas: bootstrap_state.replication.min_write_replicas,
         total_slots: bootstrap_state.replication.total_slots,
     };
-    cfg.archive = bootstrap_state.archive.as_ref().map(|archive| config::ArchiveConfig {
-        archive_type: archive.archive_type.clone(),
-        s3: archive.s3.as_ref().map(|s3| config::S3Config {
-            bucket: s3.bucket.clone(),
-            region: s3.region.clone(),
-            endpoint: s3.endpoint.clone(),
-            allow_http: s3.allow_http,
-            credentials: config::S3Credentials {
-                access_key_id: s3.credentials.access_key_id.clone(),
-                secret_access_key: s3.credentials.secret_access_key.clone(),
-            },
-        }),
-        redis: archive.redis.as_ref().map(|redis| config::ArchiveRedisConfig {
-            url: redis.url.clone(),
-            key_prefix: redis.key_prefix.clone(),
-        }),
-    });
+    cfg.archive = bootstrap_state
+        .archive
+        .as_ref()
+        .map(|archive| config::ArchiveConfig {
+            archive_type: archive.archive_type.clone(),
+            s3: archive.s3.as_ref().map(|s3| config::S3Config {
+                bucket: s3.bucket.clone(),
+                region: s3.region.clone(),
+                endpoint: s3.endpoint.clone(),
+                allow_http: s3.allow_http,
+                credentials: config::S3Credentials {
+                    access_key_id: s3.credentials.access_key_id.clone(),
+                    secret_access_key: s3.credentials.secret_access_key.clone(),
+                },
+            }),
+            redis: archive
+                .redis
+                .as_ref()
+                .map(|redis| config::ArchiveRedisConfig {
+                    url: redis.url.clone(),
+                    key_prefix: redis.key_prefix.clone(),
+                }),
+        });
 
     if let Err(message) = apply_join_overrides(&mut cfg, &join) {
         tracing::error!("join validation failed: {}", message);
@@ -381,23 +512,25 @@ async fn run_join(join: JoinInvocation) {
         }
     };
 
-    let existing_nodes = match registry.get_nodes().await {
-        Ok(nodes) => nodes,
-        Err(error) => {
-            tracing::error!("failed to query existing nodes from registry: {}", error);
-            std::process::exit(1);
-        }
-    };
+    if should_check_active_node_conflict(&registry_target) {
+        let existing_nodes = match registry.get_nodes().await {
+            Ok(nodes) => nodes,
+            Err(error) => {
+                tracing::error!("failed to query existing nodes from registry: {}", error);
+                std::process::exit(1);
+            }
+        };
 
-    if existing_nodes
-        .iter()
-        .any(|node| node.node_id == current && node.status == rimio_core::NodeStatus::Healthy)
-    {
-        tracing::error!(
-            "join rejected: active node '{}' already exists in registry",
-            current
-        );
-        std::process::exit(2);
+        if existing_nodes
+            .iter()
+            .any(|node| node.node_id == current && node.status == rimio_core::NodeStatus::Healthy)
+        {
+            tracing::error!(
+                "join rejected: active node '{}' already exists in registry",
+                current
+            );
+            std::process::exit(2);
+        }
     }
 
     let runtime_registry = Arc::clone(&registry);

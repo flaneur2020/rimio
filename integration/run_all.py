@@ -13,7 +13,7 @@ from pathlib import Path
 INTEGRATION_DIR = Path(__file__).resolve().parent
 
 
-RFC0008_PREFIXES = ("016_", "017_", "018_", "019_")
+RFC0008_PREFIXES = ("016_", "017_", "018_", "019_", "020_", "021_")
 
 
 def discover_cases(*, include_s3: bool, include_rfc0008: bool) -> list[Path]:
@@ -62,7 +62,7 @@ def main() -> None:
     parser.add_argument(
         "--include-rfc0008",
         action="store_true",
-        help="Include 016-019 RFC0008 start/join/gossip integration cases",
+        help="Include 016-021 RFC0008 start/join/gossip integration cases",
     )
     args = parser.parse_args()
 
