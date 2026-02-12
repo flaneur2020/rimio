@@ -213,10 +213,25 @@ fn parse_registry_url(url: &str) -> std::result::Result<JoinRegistryTarget, Stri
 
 fn registry_config_for_join_target(
     target: &JoinRegistryTarget,
+    join: &JoinInvocation,
 ) -> std::result::Result<config::RegistryConfig, String> {
     match target {
         JoinRegistryTarget::Gossip { seeds } => {
-            let bind_addr = derive_default_gossip_bind_addr(seeds)?;
+            let bind_addr = join
+                .listen
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .unwrap_or(derive_default_gossip_bind_addr(seeds)?);
+
+            let advertise_addr = join
+                .advertise_addr
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+
             Ok(config::RegistryConfig {
                 backend: config::RegistryBackend::Gossip,
                 namespace: Some("default".to_string()),
@@ -224,7 +239,7 @@ fn registry_config_for_join_target(
                 redis: None,
                 gossip: Some(config::GossipConfig {
                     bind_addr,
-                    advertise_addr: None,
+                    advertise_addr,
                     seeds: seeds.clone(),
                 }),
             })
@@ -392,7 +407,7 @@ async fn run_join(join: JoinInvocation) {
         }
     };
 
-    let join_registry_config = match registry_config_for_join_target(&registry_target) {
+    let join_registry_config = match registry_config_for_join_target(&registry_target, &join) {
         Ok(config) => config,
         Err(message) => {
             tracing::error!("Invalid registry URL: {}", message);
