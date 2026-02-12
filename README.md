@@ -51,11 +51,13 @@ mkdir -p demo/node1/disk demo/node2/disk demo/node3/disk
 ```bash
 cat > config.yaml <<'EOF'
 registry:
-  backend: redis
+  backend: gossip
   namespace: local-cluster-001
-  redis:
-    url: "redis://127.0.0.1:6379"
-    pool_size: 10
+  gossip:
+    bind_addr: "0.0.0.0:8400"
+    advertise_addr: "127.0.0.1:8400"
+    seeds:
+      - "127.0.0.1:8400"
 
 initial_cluster:
   nodes:
@@ -101,8 +103,8 @@ EOF
 5) Join `node-2` and `node-3`:
 
 ```bash
-./target/release/rimio join redis://127.0.0.1:6379 --node node-2
-./target/release/rimio join redis://127.0.0.1:6379 --node node-3
+./target/release/rimio join cluster://127.0.0.1:8400 --node node-2
+./target/release/rimio join cluster://127.0.0.1:8400 --node node-3
 ```
 
 6) Verify:
