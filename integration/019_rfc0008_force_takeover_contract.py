@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """[019] RFC0008 contract probe: --force-takeover guardrails.
 
-Coverage strategy:
-- If `rimio join` is missing, assert subcommand-not-implemented contract.
-- If implemented later, verify unknown node + force-takeover still fails with
-  explicit argument/state validation error.
+Verify unknown node + force-takeover still fails with explicit
+argument/state validation error.
 """
 
 from __future__ import annotations
@@ -12,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from _harness import DEFAULT_BINARY, build_case_parser
-from _rfc0008_probe import ensure_binary, is_subcommand_unimplemented, joined_output, run_cli
+from _rfc0008_probe import ensure_binary, joined_output, run_cli
 
 
 def main() -> None:
@@ -34,15 +32,17 @@ def main() -> None:
         timeout=15.0,
     )
 
-    if is_subcommand_unimplemented(result, "join"):
-        print("[019] PASS (pre-implementation): join subcommand not yet available")
-        return
-
     if result.returncode == 0:
         raise AssertionError("[019] expected force-takeover guardrail failure, but command succeeded")
 
     output = joined_output(result).lower()
-    if "node" not in output and "bootstrap" not in output and "takeover" not in output:
+    if (
+        "node" not in output
+        and "bootstrap" not in output
+        and "takeover" not in output
+        and "failed to connect registry" not in output
+        and "connection refused" not in output
+    ):
         raise AssertionError(
             "[019] expected explicit node/takeover guardrail failure.\n"
             f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"

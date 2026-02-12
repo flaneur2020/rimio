@@ -72,9 +72,8 @@ They are excluded from `run_all.py` by default until features land.
 
 Notes:
 
-- `016/017/019` are active CLI contract probes that validate either:
-  - current pre-implementation behavior (subcommand missing), or
-  - future argument/state validation behavior once command is implemented.
+- `016/017/019` are active CLI contract probes validating argument/state
+  validation behavior for `rimio join`.
 - `018` runs a real API baseline (health/nodes/get/put/delete) and is ready to
   tighten into write-gate assertions after `write_gate` controls are wired.
 

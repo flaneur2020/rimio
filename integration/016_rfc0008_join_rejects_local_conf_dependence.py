@@ -2,9 +2,7 @@
 """[016] RFC0008 contract probe: join and local-config independence.
 
 Coverage strategy:
-- If `rimio join` is not implemented yet: verify CLI reports missing subcommand.
-- If implemented later: verify join without registry URL fails fast with clear
-  usage/argument error (ensuring command is truly executed and validated).
+- verify join without registry URL fails fast with argument/usage error.
 """
 
 from __future__ import annotations
@@ -12,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from _harness import DEFAULT_BINARY, build_case_parser
-from _rfc0008_probe import ensure_binary, is_subcommand_unimplemented, joined_output, run_cli
+from _rfc0008_probe import ensure_binary, joined_output, run_cli
 
 
 def main() -> None:
@@ -23,10 +21,6 @@ def main() -> None:
     ensure_binary(binary, build_if_missing=args.build_if_missing)
 
     result = run_cli(binary, ["join"])
-
-    if is_subcommand_unimplemented(result, "join"):
-        print("[016] PASS (pre-implementation): join subcommand not yet available")
-        return
 
     if result.returncode == 0:
         raise AssertionError("[016] expected join without REGISTRY_URL to fail, but it succeeded")

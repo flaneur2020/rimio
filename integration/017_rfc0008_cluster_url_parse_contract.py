@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """[017] RFC0008 contract probe: cluster:// registry URL parse semantics.
 
-Coverage strategy:
-- If `rimio join` is missing, assert subcommand-not-implemented contract.
-- If implemented, pass malformed cluster URL and assert explicit parse/arg error.
+Pass malformed cluster URL and assert explicit parse/argument error.
 """
 
 from __future__ import annotations
@@ -11,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from _harness import DEFAULT_BINARY, build_case_parser
-from _rfc0008_probe import ensure_binary, is_subcommand_unimplemented, joined_output, run_cli
+from _rfc0008_probe import ensure_binary, joined_output, run_cli
 
 
 def main() -> None:
@@ -23,10 +21,6 @@ def main() -> None:
 
     malformed_url = "cluster://seed1:8400,broken-host:::"
     result = run_cli(binary, ["join", malformed_url, "--node", "node-x"], timeout=15.0)
-
-    if is_subcommand_unimplemented(result, "join"):
-        print("[017] PASS (pre-implementation): join subcommand not yet available")
-        return
 
     if result.returncode == 0:
         raise AssertionError("[017] expected malformed cluster URL to fail, but it succeeded")

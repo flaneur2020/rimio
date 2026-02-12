@@ -263,14 +263,22 @@ impl Config {
     }
 
     pub fn runtime_from_bootstrap(&self, bootstrap: &BootstrapState) -> Result<RuntimeConfig> {
+        Self::runtime_from_bootstrap_for_node(bootstrap, &self.current_node, self.registry.clone())
+    }
+
+    pub fn runtime_from_bootstrap_for_node(
+        bootstrap: &BootstrapState,
+        current_node: &str,
+        registry: RegistryConfig,
+    ) -> Result<RuntimeConfig> {
         let current_node = bootstrap
             .nodes
             .iter()
-            .find(|node| node.node_id == self.current_node)
+            .find(|node| node.node_id == current_node)
             .ok_or_else(|| {
                 RimError::Config(format!(
                     "current_node '{}' not found in bootstrap nodes",
-                    self.current_node
+                    current_node
                 ))
             })?;
 
@@ -291,7 +299,7 @@ impl Config {
                 min_write_replicas: bootstrap.replication.min_write_replicas,
                 total_slots: bootstrap.replication.total_slots,
             },
-            registry: self.registry.clone(),
+            registry,
             archive: bootstrap.archive.as_ref().map(|archive| ArchiveConfig {
                 archive_type: archive.archive_type.clone(),
                 s3: archive.s3.as_ref().map(|s3| S3Config {
