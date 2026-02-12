@@ -1,6 +1,5 @@
 use super::{
-    Registry, etcd::EtcdRegistry, gossip_memberlist::GossipMemberlistRegistry,
-    redis::RedisRegistry,
+    Registry, etcd::EtcdRegistry, gossip_memberlist::GossipMemberlistRegistry, redis::RedisRegistry,
 };
 use crate::{Result, RimError};
 use std::sync::Arc;
@@ -10,6 +9,7 @@ pub struct RegistryBuilder {
     backend: Option<String>,
     namespace: Option<String>,
     gossip_node_id: Option<String>,
+    gossip_transport: Option<String>,
     etcd_endpoints: Option<Vec<String>>,
     redis_url: Option<String>,
     gossip_bind_addr: Option<String>,
@@ -34,6 +34,11 @@ impl RegistryBuilder {
 
     pub fn gossip_node_id(mut self, node_id: impl Into<String>) -> Self {
         self.gossip_node_id = Some(node_id.into());
+        self
+    }
+
+    pub fn gossip_transport(mut self, transport: impl Into<String>) -> Self {
+        self.gossip_transport = Some(transport.into());
         self
     }
 
@@ -126,10 +131,32 @@ impl RegistryBuilder {
                 Ok(Arc::new(registry))
             }
             "gossip" => {
+                let transport = self
+                    .gossip_transport
+                    .as_deref()
+                    .unwrap_or("memberlist_net")
+                    .trim()
+                    .to_ascii_lowercase();
+
+                if transport == "internal_http" {
+                    return Err(RimError::Config(
+                        "gossip transport 'internal_http' is planned but not implemented yet"
+                            .to_string(),
+                    ));
+                }
+
+                if transport != "memberlist_net" && transport != "net" {
+                    return Err(RimError::Config(format!(
+                        "unsupported gossip transport '{}': expected memberlist_net|internal_http",
+                        transport
+                    )));
+                }
+
                 let bind_addr = self.gossip_bind_addr.as_deref().unwrap_or_default().trim();
                 if bind_addr.is_empty() {
                     return Err(RimError::Config(
-                        "gossip bind_addr is required for gossip backend".to_string(),
+                        "gossip bind_addr is required for gossip backend when transport=memberlist_net"
+                            .to_string(),
                     ));
                 }
 

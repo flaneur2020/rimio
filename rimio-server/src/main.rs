@@ -238,7 +238,8 @@ fn registry_config_for_join_target(
                 etcd: None,
                 redis: None,
                 gossip: Some(config::GossipConfig {
-                    bind_addr,
+                    transport: "memberlist_net".to_string(),
+                    bind_addr: Some(bind_addr),
                     advertise_addr,
                     seeds: seeds.clone(),
                 }),

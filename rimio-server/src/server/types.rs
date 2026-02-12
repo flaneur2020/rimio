@@ -1,4 +1,4 @@
-use rimio_core::{BlobMeta, TombstoneMeta};
+use rimio_core::{BlobMeta, ClusterState, TombstoneMeta};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -184,6 +184,17 @@ pub(crate) struct HealRepairResponse {
     pub(crate) repaired_objects: usize,
     pub(crate) skipped_objects: usize,
     pub(crate) errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct InternalBootstrapResponse {
+    pub(crate) found: bool,
+    pub(crate) state: Option<ClusterState>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct InternalGossipSeedsResponse {
+    pub(crate) seeds: Vec<String>,
 }
 
 fn default_limit() -> usize {

@@ -29,7 +29,8 @@ use external::{
 };
 use internal::{
     internal_get_head, internal_get_part, internal_put_head, internal_put_part,
-    v1_internal_heal_heads, v1_internal_heal_repair, v1_internal_heal_slotlets,
+    v1_internal_cluster_bootstrap, v1_internal_cluster_gossip_seeds, v1_internal_heal_heads,
+    v1_internal_heal_repair, v1_internal_heal_slotlets,
 };
 pub(crate) use types::*;
 
@@ -193,6 +194,14 @@ pub async fn run_server(config: RuntimeConfig, registry: Arc<dyn Registry>) -> R
         .route(
             "/internal/v1/slots/:slot_id/heal/repair",
             post(v1_internal_heal_repair),
+        )
+        .route(
+            "/internal/v1/cluster/bootstrap",
+            get(v1_internal_cluster_bootstrap),
+        )
+        .route(
+            "/internal/v1/cluster/gossip-seeds",
+            get(v1_internal_cluster_gossip_seeds),
         )
         .merge(rimio_s3_gateway::router::<ServerState>())
         .with_state(state);

@@ -39,6 +39,12 @@ Distributed write coordination and node lifecycle management.
 - [ ] Node join/leave handling
 - [ ] Health checking and failure detection
 
+- [x] RFC0010 drafted for single-port memberlist transport
+- [x] Added internal bootstrap and gossip seed discovery endpoints
+- [ ] Implement memberlist custom internal transport (`Transport`)
+- [ ] Wire gossip startup sequence to single-port flow
+- [ ] Remove user-facing `registry.gossip.bind_addr/advertise_addr`
+
 ### 📋 Phase 3: Anti-Entropy
 
 Background synchronization for replica convergence.

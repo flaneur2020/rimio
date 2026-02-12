@@ -1,8 +1,9 @@
 use super::{
     HealHeadItem, HealHeadsRequest, HealHeadsResponse, HealRepairRequest, HealRepairResponse,
-    HealSlotlet, HealSlotletsQuery, HealSlotletsResponse, InternalHeadApplyRequest,
-    InternalHeadApplyResponse, InternalHeadResponse, InternalPartPutResponse, InternalPartQuery,
-    InternalPathQuery, ServerState, normalize_blob_path, response_error,
+    HealSlotlet, HealSlotletsQuery, HealSlotletsResponse, InternalBootstrapResponse,
+    InternalGossipSeedsResponse, InternalHeadApplyRequest, InternalHeadApplyResponse,
+    InternalHeadResponse, InternalPartPutResponse, InternalPartQuery, InternalPathQuery,
+    ServerState, normalize_blob_path, response_error,
 };
 use axum::{
     Json,
@@ -329,4 +330,62 @@ pub(crate) async fn v1_internal_heal_repair(
             .into_response(),
         Err(error) => response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
+}
+
+pub(crate) async fn v1_internal_cluster_bootstrap(
+    State(state): State<Arc<ServerState>>,
+) -> impl IntoResponse {
+    let bootstrap_bytes = match state.registry.get_bootstrap_state().await {
+        Ok(payload) => payload,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let Some(payload) = bootstrap_bytes else {
+        return (
+            StatusCode::OK,
+            Json(InternalBootstrapResponse {
+                found: false,
+                state: None,
+            }),
+        )
+            .into_response();
+    };
+
+    let bootstrap_state: rimio_core::ClusterState = match serde_json::from_slice(&payload) {
+        Ok(state) => state,
+        Err(error) => {
+            return response_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("invalid bootstrap state payload in registry: {}", error),
+            );
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(InternalBootstrapResponse {
+            found: true,
+            state: Some(bootstrap_state),
+        }),
+    )
+        .into_response()
+}
+
+pub(crate) async fn v1_internal_cluster_gossip_seeds(
+    State(state): State<Arc<ServerState>>,
+) -> impl IntoResponse {
+    let nodes = match super::current_nodes(&state).await {
+        Ok(nodes) => nodes,
+        Err(error) => return response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+
+    let mut seeds = nodes
+        .into_iter()
+        .map(|node| node.address)
+        .filter(|address| !address.trim().is_empty())
+        .collect::<Vec<_>>();
+    seeds.sort();
+    seeds.dedup();
+
+    (StatusCode::OK, Json(InternalGossipSeedsResponse { seeds })).into_response()
 }

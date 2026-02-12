@@ -5,8 +5,8 @@ use crate::slot_manager::{ReplicaStatus, SlotHealth, SlotInfo};
 use async_trait::async_trait;
 use bytes::Bytes;
 use memberlist::delegate::{AliveDelegate, CompositeDelegate, EventDelegate, MergeDelegate};
-use memberlist::net::stream_layer::tcp::Tcp;
 use memberlist::net::NetTransportOptions;
+use memberlist::net::stream_layer::tcp::Tcp;
 use memberlist::proto::{MaybeResolvedAddress, Meta, NodeState, State};
 use memberlist::tokio::{TokioNetTransport, TokioRuntime};
 use memberlist::transport::Node;
@@ -93,8 +93,9 @@ impl RegistryMemberlistDelegate {
     }
 
     fn encode_meta(meta: &WireGossipMeta) -> std::result::Result<Meta, DelegateError> {
-        let encoded = serde_json::to_vec(meta)
-            .map_err(|error| DelegateError::Message(format!("encode gossip meta failed: {}", error)))?;
+        let encoded = serde_json::to_vec(meta).map_err(|error| {
+            DelegateError::Message(format!("encode gossip meta failed: {}", error))
+        })?;
 
         Meta::try_from(encoded)
             .map_err(|error| DelegateError::Message(format!("gossip meta too large: {}", error)))
@@ -105,12 +106,16 @@ impl RegistryMemberlistDelegate {
             return Ok(None);
         }
 
-        let parsed: WireGossipMeta = serde_json::from_slice(meta.as_bytes())
-            .map_err(|error| DelegateError::Message(format!("decode gossip meta failed: {}", error)))?;
+        let parsed: WireGossipMeta = serde_json::from_slice(meta.as_bytes()).map_err(|error| {
+            DelegateError::Message(format!("decode gossip meta failed: {}", error))
+        })?;
         Ok(Some(parsed))
     }
 
-    fn validate_peer(&self, peer: &NodeState<SmolStr, SocketAddr>) -> std::result::Result<(), DelegateError> {
+    fn validate_peer(
+        &self,
+        peer: &NodeState<SmolStr, SocketAddr>,
+    ) -> std::result::Result<(), DelegateError> {
         if let Some(meta) = Self::decode_meta(peer.meta())?
             && meta.namespace != self.namespace
         {
@@ -406,8 +411,7 @@ impl Registry for GossipMemberlistRegistry {
         if node.group_id.trim() != self.namespace {
             return Err(RimError::Config(format!(
                 "node group_id mismatch: expected='{}', got='{}'",
-                self.namespace,
-                node.group_id
+                self.namespace, node.group_id
             )));
         }
 
@@ -420,7 +424,9 @@ impl Registry for GossipMemberlistRegistry {
         self.memberlist
             .update_node(std::time::Duration::from_secs(1))
             .await
-            .map_err(|error| RimError::Internal(format!("memberlist update_node failed: {}", error)))?;
+            .map_err(|error| {
+                RimError::Internal(format!("memberlist update_node failed: {}", error))
+            })?;
 
         Ok(())
     }

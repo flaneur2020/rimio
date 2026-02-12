@@ -95,11 +95,18 @@ pub struct RedisConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GossipConfig {
-    pub bind_addr: String,
+    #[serde(default = "default_gossip_transport")]
+    pub transport: String,
+    #[serde(default)]
+    pub bind_addr: Option<String>,
     #[serde(default)]
     pub advertise_addr: Option<String>,
     #[serde(default)]
     pub seeds: Vec<String>,
+}
+
+fn default_gossip_transport() -> String {
+    "memberlist_net".to_string()
 }
 
 fn default_redis_pool_size() -> usize {
@@ -273,16 +280,21 @@ impl Config {
             }
             RegistryBackend::Gossip => {
                 let gossip = self.registry.gossip.clone().unwrap_or(GossipConfig {
-                    bind_addr: String::new(),
+                    transport: default_gossip_transport(),
+                    bind_addr: None,
                     advertise_addr: None,
                     seeds: Vec::new(),
                 });
 
                 let mut builder = builder
                     .backend("gossip")
+                    .gossip_transport(gossip.transport)
                     .gossip_node_id(self.current_node.clone())
-                    .gossip_bind_addr(gossip.bind_addr)
                     .gossip_seeds(gossip.seeds);
+
+                if let Some(bind_addr) = gossip.bind_addr {
+                    builder = builder.gossip_bind_addr(bind_addr);
+                }
 
                 if let Some(advertise_addr) = gossip.advertise_addr {
                     builder = builder.gossip_advertise_addr(advertise_addr);
