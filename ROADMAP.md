@@ -60,6 +60,8 @@ Background synchronization for replica convergence.
 
 Hot/warm/cold data lifecycle with S3 archival.
 
+- [x] Primary-slot archive lifecycle manager (background sync)
+- [x] Time-ordered archive sync cursor + replica archive_url propagation
 - [ ] Chunk-level archiving to S3
 - [ ] On-demand restoration from archive
 - [ ] LRU-based eviction policy
