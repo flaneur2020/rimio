@@ -3052,35 +3052,21 @@ dependencies = [
  "etcd-client",
  "futures-util",
  "hex",
+ "memberlist",
  "object_store",
  "redis",
  "reqwest",
- "rimio-meta",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2",
+ "smol_str 0.3.5",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
  "tracing",
  "ulid",
-]
-
-[[package]]
-name = "rimio-meta"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "memberlist",
- "reqwest",
- "serde",
- "serde_json",
- "smol_str 0.3.5",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
 ]
 
 [[package]]

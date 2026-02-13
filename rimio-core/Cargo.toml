@@ -27,7 +27,8 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
 object_store = { version = "0.11", features = ["aws"] }
 futures-util = "0.3"
-rimio-meta = { path = "../rimio-meta" }
+memberlist = { version = "0.7", default-features = false, features = ["tokio", "tcp"] }
+smol_str = "0.3"
 
 [dev-dependencies]
 tokio-test = "0.4"

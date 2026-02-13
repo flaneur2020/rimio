@@ -5,6 +5,7 @@
 
 pub mod etcd;
 pub mod factory;
+pub mod gossip_internal_transport;
 pub mod gossip_memberlist;
 pub mod redis;
 
