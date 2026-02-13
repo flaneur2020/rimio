@@ -4,9 +4,10 @@ use super::types::{
 };
 use crate::{
     ArchiveStore, BlobMeta, MetadataStore, PartIndexState, RedisArchiveStore, RegistryBuilder,
-    Result, RimError, SlotManager, slot_for_key,
+    Result, RimError, SlotInfo, SlotManager, slot_for_key,
 };
 use chrono::Utc;
+use ulid::Ulid;
 
 #[derive(Clone)]
 pub struct ClusterManager {
@@ -60,6 +61,7 @@ impl ClusterManager {
         ensure_local_layout(&request.current_node, &state)?;
 
         if won_bootstrap_race {
+            ensure_slot_assignments(&bootstrap_store, &state).await?;
             run_optional_init_scan(&request.current_node, &request.init_scan, &state).await?;
         }
 
@@ -68,6 +70,76 @@ impl ClusterManager {
             won_bootstrap_race,
         })
     }
+}
+
+async fn ensure_slot_assignments(
+    registry: &std::sync::Arc<dyn crate::Registry>,
+    state: &ClusterState,
+) -> Result<()> {
+    let mut existing = registry.get_all_slots().await?;
+    let total_slots = state.replication.total_slots;
+
+    if existing.len() >= total_slots as usize {
+        return Ok(());
+    }
+
+    let mut node_ids: Vec<String> = state
+        .nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect();
+    node_ids.sort();
+    node_ids.dedup();
+
+    if node_ids.is_empty() {
+        return Err(RimError::Config(
+            "initial cluster has no nodes for slot assignment".to_string(),
+        ));
+    }
+
+    let replica_count = node_ids.len().min(3).max(1);
+    let mut created = 0usize;
+
+    for slot_id in 0..total_slots {
+        if existing.contains_key(&slot_id) {
+            continue;
+        }
+
+        let start = (slot_id as usize) % node_ids.len();
+        let mut replicas = Vec::with_capacity(replica_count);
+        for offset in 0..replica_count {
+            replicas.push(node_ids[(start + offset) % node_ids.len()].clone());
+        }
+
+        let primary = replicas.first().cloned().ok_or_else(|| {
+            RimError::Internal(format!(
+                "slot {} assignment produced empty replica list",
+                slot_id
+            ))
+        })?;
+
+        let slot = SlotInfo {
+            slot_id,
+            replicas,
+            primary,
+            latest_seq: Ulid::new().to_string(),
+        };
+
+        registry.set_slot(&slot).await?;
+        existing.insert(slot_id, slot);
+        created += 1;
+    }
+
+    if created > 0 {
+        tracing::info!(
+            "initialized slot assignments in registry: created={} total_slots={} replica_count={}",
+            created,
+            total_slots,
+            replica_count
+        );
+    }
+
+    Ok(())
 }
 
 fn decode_cluster_state(payload: &[u8]) -> Result<ClusterState> {

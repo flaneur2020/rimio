@@ -1,5 +1,6 @@
 //! Rimio Core - Core library for lightweight object storage for edge cloud nodes
 
+pub mod archive;
 pub mod cluster;
 pub mod error;
 pub mod node;
@@ -8,6 +9,7 @@ pub mod registry;
 pub mod slot_manager;
 pub mod storage;
 
+pub use archive::{ArchiveLifecycleConfig, ArchiveLifecycleManager};
 pub use cluster::*;
 pub use error::{Result, RimError};
 pub use node::{Node, NodeInfo, NodeStatus};

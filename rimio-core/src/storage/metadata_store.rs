@@ -619,6 +619,106 @@ impl MetadataStore {
         Ok(path)
     }
 
+    pub fn list_meta_updates_after(
+        &self,
+        cursor_updated_at: Option<&str>,
+        cursor_blob_path: Option<&str>,
+        cursor_generation: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<BlobMeta>> {
+        let conn = self.get_conn()?;
+        let limit = limit.max(1);
+
+        let mut metas = Vec::new();
+
+        if let (Some(updated_at), Some(blob_path), Some(generation)) =
+            (cursor_updated_at, cursor_blob_path, cursor_generation)
+        {
+            let sql = "SELECT blob_path, generation, inline_data, updated_at
+                 FROM file_entries
+                 WHERE slot_id = ?1
+                   AND file_kind = 'meta'
+                   AND (
+                        updated_at > ?2
+                        OR (updated_at = ?2 AND blob_path > ?3)
+                        OR (updated_at = ?2 AND blob_path = ?3 AND generation > ?4)
+                   )
+                 ORDER BY updated_at ASC, blob_path ASC, generation ASC, pk ASC
+                 LIMIT ?5";
+
+            let mut stmt = conn.prepare(sql)?;
+            let mut rows = stmt.query(params![
+                self.slot.slot_id as i64,
+                updated_at,
+                blob_path,
+                generation,
+                limit as i64,
+            ])?;
+
+            while let Some(row) = rows.next()? {
+                let row_blob_path: String = row.get(0)?;
+                let row_generation: i64 = row.get(1)?;
+                let inline_data: Vec<u8> = row.get(2)?;
+                let row_updated_at: String = row.get(3)?;
+
+                let mut meta: BlobMeta = serde_json::from_slice(&inline_data)?;
+                meta.path = row_blob_path;
+                meta.slot_id = self.slot.slot_id;
+                meta.generation = row_generation;
+                if meta.version == 0 {
+                    meta.version = row_generation;
+                }
+                if meta.part_size == 0 {
+                    meta.part_size = default_part_size();
+                }
+                if meta.part_count == 0 && meta.size_bytes > 0 {
+                    let part_size = meta.part_size.max(1);
+                    meta.part_count = meta.size_bytes.div_ceil(part_size) as u32;
+                }
+                meta.updated_at = parse_rfc3339(&row_updated_at)?;
+
+                metas.push(meta);
+            }
+        } else {
+            let sql = "SELECT blob_path, generation, inline_data, updated_at
+                 FROM file_entries
+                 WHERE slot_id = ?1
+                   AND file_kind = 'meta'
+                 ORDER BY updated_at ASC, blob_path ASC, generation ASC, pk ASC
+                 LIMIT ?2";
+
+            let mut stmt = conn.prepare(sql)?;
+            let mut rows = stmt.query(params![self.slot.slot_id as i64, limit as i64])?;
+
+            while let Some(row) = rows.next()? {
+                let row_blob_path: String = row.get(0)?;
+                let row_generation: i64 = row.get(1)?;
+                let inline_data: Vec<u8> = row.get(2)?;
+                let row_updated_at: String = row.get(3)?;
+
+                let mut meta: BlobMeta = serde_json::from_slice(&inline_data)?;
+                meta.path = row_blob_path;
+                meta.slot_id = self.slot.slot_id;
+                meta.generation = row_generation;
+                if meta.version == 0 {
+                    meta.version = row_generation;
+                }
+                if meta.part_size == 0 {
+                    meta.part_size = default_part_size();
+                }
+                if meta.part_count == 0 && meta.size_bytes > 0 {
+                    let part_size = meta.part_size.max(1);
+                    meta.part_count = meta.size_bytes.div_ceil(part_size) as u32;
+                }
+                meta.updated_at = parse_rfc3339(&row_updated_at)?;
+
+                metas.push(meta);
+            }
+        }
+
+        Ok(metas)
+    }
+
     fn decode_head_row(&self, row: HeadRow) -> Result<Option<BlobHead>> {
         let updated_at = parse_rfc3339(&row.updated_at)?;
 

@@ -6,12 +6,12 @@ use axum::{
     routing::{get, post, put},
 };
 use rimio_core::{
-    ArchiveStore, ClusterClient, Coordinator, DeleteBlobOperation, HealHeadsOperation,
-    HealRepairOperation, HealSlotletsOperation, InternalGetHeadOperation, InternalGetPartOperation,
-    InternalPutHeadOperation, InternalPutPartOperation, ListBlobsOperation, Node, NodeInfo,
-    PartStore, PutBlobArchiveWriter, PutBlobOperation, ReadBlobOperation, RedisArchiveStore,
-    Registry, Result, RimError, S3ArchiveStore, clear_global_gossip_ingress,
-    set_default_s3_archive_store,
+    ArchiveLifecycleConfig, ArchiveLifecycleManager, ArchiveStore, ClusterClient, Coordinator,
+    DeleteBlobOperation, HealHeadsOperation, HealRepairOperation, HealSlotletsOperation,
+    InternalGetHeadOperation, InternalGetPartOperation, InternalPutHeadOperation,
+    InternalPutPartOperation, ListBlobsOperation, Node, NodeInfo, PartStore, PutBlobArchiveWriter,
+    PutBlobOperation, ReadBlobOperation, RedisArchiveStore, Registry, Result, RimError,
+    S3ArchiveStore, clear_global_gossip_ingress, set_default_s3_archive_store,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -83,7 +83,7 @@ pub async fn run_server(config: RuntimeConfig, registry: Arc<dyn Registry>) -> R
         data_dir.clone(),
     )?);
 
-    let part_store = Arc::new(PartStore::new(data_dir)?);
+    let part_store = Arc::new(PartStore::new(data_dir.clone())?);
 
     let coordinator = Arc::new(Coordinator::new(config.replication.min_write_replicas));
     let cluster_client = Arc::new(ClusterClient::new(registry.clone()));
@@ -150,6 +150,28 @@ pub async fn run_server(config: RuntimeConfig, registry: Arc<dyn Registry>) -> R
     });
 
     register_local_node(&state).await?;
+
+    if let (Some(archive_store), Some(archive_key_prefix)) =
+        (runtime_archive_store.clone(), archive_key_prefix.clone())
+    {
+        let archive_manager = Arc::new(ArchiveLifecycleManager::new(
+            node_cfg.node_id.clone(),
+            state.registry.clone(),
+            slot_manager.clone(),
+            part_store.clone(),
+            cluster_client.clone(),
+            archive_store,
+            archive_key_prefix,
+            data_dir.clone(),
+            ArchiveLifecycleConfig::default(),
+        )?);
+        archive_manager.start();
+
+        tracing::info!(
+            "archive lifecycle manager enabled for node {}",
+            node_cfg.node_id
+        );
+    }
 
     {
         let heartbeat_state = state.clone();

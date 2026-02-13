@@ -1,5 +1,7 @@
 use super::types::ReplicatedPart;
-use crate::{BlobHead, BlobMeta, HeadKind, NodeInfo, Registry, Result, RimError, TombstoneMeta};
+use crate::{
+    BlobHead, BlobMeta, HeadKind, NodeInfo, Registry, Result, RimError, TombstoneMeta, compute_hash,
+};
 use chrono::Utc;
 use reqwest::{
     Client, Url,
@@ -167,6 +169,53 @@ impl ClusterClient {
         if !response.status().is_success() {
             return Err(RimError::Http(format!(
                 "replica tombstone write failed: node={} status={} path={}",
+                target.node_id,
+                response.status(),
+                path
+            )));
+        }
+
+        Ok(())
+    }
+
+    pub async fn replicate_archive_meta_update(
+        &self,
+        target_node_id: &str,
+        slot_id: u16,
+        path: &str,
+        meta: &BlobMeta,
+    ) -> Result<()> {
+        let target = self.resolve_node(target_node_id).await?;
+
+        let head_url = self
+            .internal_head_url(&target.node_id, slot_id, path)
+            .await?;
+
+        let payload_bytes = serde_json::to_vec(meta)?;
+        let payload = InternalHeadApplyRequest {
+            head_kind: "meta".to_string(),
+            generation: meta.generation,
+            head_sha256: compute_hash(&payload_bytes),
+            meta: Some(meta.clone()),
+            tombstone: None,
+        };
+
+        let response = self
+            .client
+            .put(head_url)
+            .header(
+                "x-rimio-write-id",
+                format!("archive-sync-{}", ulid::Ulid::new()),
+            )
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|error| RimError::Http(error.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(RimError::Http(format!(
+                "archive replica head write failed: node={} status={} path={}",
                 target.node_id,
                 response.status(),
                 path
