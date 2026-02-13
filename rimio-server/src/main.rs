@@ -6,8 +6,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 mod server;
 use rimio_core::InitClusterOperation;
+use serde::Deserialize;
 use server::run_server;
-use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "rimio")]
@@ -86,6 +86,13 @@ enum JoinRegistryTarget {
     Etcd { endpoints: Vec<String> },
 }
 
+#[derive(Debug, Deserialize)]
+struct InternalBootstrapPayload {
+    found: bool,
+    namespace: String,
+    state: Option<rimio_core::ClusterState>,
+}
+
 fn parse_host_port_entry(value: &str, field: &str) -> std::result::Result<String, String> {
     let trimmed = value.trim();
     let (host_raw, port_raw) = trimmed
@@ -159,24 +166,6 @@ fn parse_etcd_endpoints(raw: &str) -> std::result::Result<Vec<String>, String> {
     Ok(parsed_endpoints)
 }
 
-fn derive_default_gossip_bind_addr(seeds: &[String]) -> std::result::Result<String, String> {
-    let first_seed = seeds
-        .first()
-        .ok_or_else(|| "gossip join requires at least one seed".to_string())?;
-
-    let (host_raw, port_raw) = first_seed
-        .rsplit_once(':')
-        .ok_or_else(|| format!("invalid seed '{}': expected host:port", first_seed))?;
-    let host = host_raw.trim();
-    let port = port_raw.trim();
-
-    if host.starts_with('[') {
-        Ok(format!("[::]:{}", port))
-    } else {
-        Ok(format!("0.0.0.0:{}", port))
-    }
-}
-
 fn parse_registry_url(url: &str) -> std::result::Result<JoinRegistryTarget, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
@@ -213,38 +202,19 @@ fn parse_registry_url(url: &str) -> std::result::Result<JoinRegistryTarget, Stri
 
 fn registry_config_for_join_target(
     target: &JoinRegistryTarget,
-    join: &JoinInvocation,
+    _join: &JoinInvocation,
 ) -> std::result::Result<config::RegistryConfig, String> {
     match target {
-        JoinRegistryTarget::Gossip { seeds } => {
-            let bind_addr = join
-                .listen
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .unwrap_or(derive_default_gossip_bind_addr(seeds)?);
-
-            let advertise_addr = join
-                .advertise_addr
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
-
-            Ok(config::RegistryConfig {
-                backend: config::RegistryBackend::Gossip,
-                namespace: Some("default".to_string()),
-                etcd: None,
-                redis: None,
-                gossip: Some(config::GossipConfig {
-                    transport: "memberlist_net".to_string(),
-                    bind_addr: Some(bind_addr),
-                    advertise_addr,
-                    seeds: seeds.clone(),
-                }),
-            })
-        }
+        JoinRegistryTarget::Gossip { seeds } => Ok(config::RegistryConfig {
+            backend: config::RegistryBackend::Gossip,
+            namespace: Some("default".to_string()),
+            etcd: None,
+            redis: None,
+            gossip: Some(config::GossipConfig {
+                transport: "internal_http".to_string(),
+                seeds: seeds.clone(),
+            }),
+        }),
         JoinRegistryTarget::Redis { url } => Ok(config::RegistryConfig {
             backend: config::RegistryBackend::Redis,
             namespace: Some("default".to_string()),
@@ -269,6 +239,63 @@ fn registry_config_for_join_target(
 
 fn should_check_active_node_conflict(target: &JoinRegistryTarget) -> bool {
     !matches!(target, JoinRegistryTarget::Gossip { .. })
+}
+
+async fn fetch_bootstrap_state_from_gossip_seeds(
+    seeds: &[String],
+) -> std::result::Result<(String, rimio_core::ClusterState), String> {
+    if seeds.is_empty() {
+        return Err("cluster:// registry_url has no seeds".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|error| format!("failed to build HTTP client: {}", error))?;
+
+    let mut last_error: Option<String> = None;
+
+    for seed in seeds {
+        let url = format!("http://{}/internal/v1/cluster/bootstrap", seed);
+        let response = match client.get(&url).send().await {
+            Ok(response) => response,
+            Err(error) => {
+                last_error = Some(format!("seed {} unreachable: {}", seed, error));
+                continue;
+            }
+        };
+
+        if !response.status().is_success() {
+            last_error = Some(format!(
+                "seed {} returned unexpected status {}",
+                seed,
+                response.status()
+            ));
+            continue;
+        }
+
+        let payload: InternalBootstrapPayload = response
+            .json()
+            .await
+            .map_err(|error| format!("seed {} returned invalid bootstrap JSON: {}", seed, error))?;
+
+        if !payload.found {
+            return Err(
+                "cluster bootstrap state not found in registry; start the cluster first"
+                    .to_string(),
+            );
+        }
+
+        let state = payload
+            .state
+            .ok_or_else(|| format!("seed {} bootstrap payload missing state body", seed))?;
+
+        return Ok((payload.namespace, state));
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        "all gossip seeds are unreachable while reading bootstrap state".to_string()
+    }))
 }
 
 fn apply_join_overrides(
@@ -334,15 +361,20 @@ fn apply_join_overrides(
         ));
     }
 
-    cfg.current_node = join.node.clone();
     Ok(())
 }
 
-async fn run_with_config(cfg: Config, init_only: bool) {
-    let registry_builder = cfg.registry_builder();
+async fn run_with_config(mut cfg: Config, current_node: &str, init_only: bool) {
+    cfg.initial_cluster
+        .nodes
+        .sort_by(|left, right| left.node_id.cmp(&right.node_id));
+
+    let registry_builder = cfg.registry_builder_for_node(current_node);
+
+    let init_request = { cfg.to_init_cluster_request_for_node(current_node) };
 
     let init_operation = InitClusterOperation::new(registry_builder.clone());
-    let init_result = match init_operation.run(cfg.to_init_cluster_request()).await {
+    let init_result = match init_operation.run(init_request).await {
         Ok(result) => result,
         Err(error) => {
             tracing::error!("Initialization failed: {}", error);
@@ -353,24 +385,28 @@ async fn run_with_config(cfg: Config, init_only: bool) {
     if init_result.won_bootstrap_race {
         tracing::info!(
             "Node {} won initialization race and persisted bootstrap state",
-            cfg.current_node
+            current_node
         );
     } else {
         tracing::info!(
             "Node {} reused existing bootstrap state from registry",
-            cfg.current_node
+            current_node
         );
     }
 
     if init_only {
         tracing::info!(
             "Initialization completed for node {} (init-only mode)",
-            cfg.current_node
+            current_node
         );
         return;
     }
 
-    let runtime_config = match cfg.runtime_from_bootstrap(&init_result.bootstrap_state) {
+    let runtime_config = match config::Config::runtime_from_bootstrap_for_node(
+        &init_result.bootstrap_state,
+        current_node,
+        cfg.registry.clone(),
+    ) {
         Ok(runtime) => runtime,
         Err(error) => {
             tracing::error!("Failed to build runtime config: {}", error);
@@ -385,7 +421,8 @@ async fn run_with_config(cfg: Config, init_only: bool) {
         runtime_config.replication.total_slots
     );
 
-    let registry = match registry_builder.build().await {
+    let runtime_registry_builder = cfg.registry_builder_for_node(current_node);
+    let registry = match runtime_registry_builder.build().await {
         Ok(registry) => registry,
         Err(error) => {
             tracing::error!("Failed to create runtime registry: {}", error);
@@ -417,7 +454,6 @@ async fn run_join(join: JoinInvocation) {
     };
 
     let mut cfg = Config {
-        current_node: join.node.clone(),
         registry: join_registry_config,
         initial_cluster: config::InitialClusterConfig {
             nodes: vec![config::InitialNodeConfig {
@@ -434,35 +470,60 @@ async fn run_join(join: JoinInvocation) {
         init_scan: None,
     };
 
-    let registry_builder = cfg.registry_builder();
-    let registry = match registry_builder.build().await {
-        Ok(registry) => registry,
-        Err(error) => {
-            tracing::error!("Failed to connect registry for join: {}", error);
-            std::process::exit(1);
-        }
-    };
+    let mut preflight_registry: Option<std::sync::Arc<dyn rimio_core::Registry>> = None;
 
-    let bootstrap_bytes = match registry.get_bootstrap_state().await {
-        Ok(Some(payload)) => payload,
-        Ok(None) => {
-            tracing::error!(
-                "cluster bootstrap state not found in registry {}; start the cluster first",
-                join.registry_url
-            );
-            std::process::exit(2);
+    let bootstrap_state: rimio_core::ClusterState = match &registry_target {
+        JoinRegistryTarget::Gossip { seeds } => {
+            match fetch_bootstrap_state_from_gossip_seeds(seeds).await {
+                Ok((namespace, state)) => {
+                    cfg.registry.namespace = Some(namespace);
+                    state
+                }
+                Err(message) => {
+                    tracing::error!(
+                        "failed to read bootstrap state from gossip seeds ({}): {}",
+                        join.registry_url,
+                        message
+                    );
+                    std::process::exit(2);
+                }
+            }
         }
-        Err(error) => {
-            tracing::error!("failed to read bootstrap state from registry: {}", error);
-            std::process::exit(1);
-        }
-    };
+        _ => {
+            let registry_builder = cfg.registry_builder_for_node(&join.node);
+            let registry = match registry_builder.build().await {
+                Ok(registry) => registry,
+                Err(error) => {
+                    tracing::error!("Failed to connect registry for join: {}", error);
+                    std::process::exit(1);
+                }
+            };
 
-    let bootstrap_state: rimio_core::ClusterState = match serde_json::from_slice(&bootstrap_bytes) {
-        Ok(state) => state,
-        Err(error) => {
-            tracing::error!("invalid bootstrap state payload in registry: {}", error);
-            std::process::exit(1);
+            let bootstrap_bytes = match registry.get_bootstrap_state().await {
+                Ok(Some(payload)) => payload,
+                Ok(None) => {
+                    tracing::error!(
+                        "cluster bootstrap state not found in registry {}; start the cluster first",
+                        join.registry_url
+                    );
+                    std::process::exit(2);
+                }
+                Err(error) => {
+                    tracing::error!("failed to read bootstrap state from registry: {}", error);
+                    std::process::exit(1);
+                }
+            };
+
+            let state: rimio_core::ClusterState = match serde_json::from_slice(&bootstrap_bytes) {
+                Ok(state) => state,
+                Err(error) => {
+                    tracing::error!("invalid bootstrap state payload in registry: {}", error);
+                    std::process::exit(1);
+                }
+            };
+
+            preflight_registry = Some(registry);
+            state
         }
     };
 
@@ -515,7 +576,7 @@ async fn run_join(join: JoinInvocation) {
         std::process::exit(2);
     }
 
-    let current = cfg.current_node.clone();
+    let current = join.node.clone();
     let runtime_cfg = match config::Config::runtime_from_bootstrap_for_node(
         &bootstrap_state,
         &current,
@@ -529,6 +590,9 @@ async fn run_join(join: JoinInvocation) {
     };
 
     if should_check_active_node_conflict(&registry_target) {
+        let registry =
+            preflight_registry.expect("preflight registry must exist for non-gossip target");
+
         let existing_nodes = match registry.get_nodes().await {
             Ok(nodes) => nodes,
             Err(error) => {
@@ -549,13 +613,20 @@ async fn run_join(join: JoinInvocation) {
         }
     }
 
-    let runtime_registry = Arc::clone(&registry);
-
     tracing::info!(
         "Join succeeded for node {} via {}",
         runtime_cfg.node.node_id,
         join.registry_url
     );
+
+    let runtime_registry_builder = cfg.registry_builder_for_node(&current);
+    let runtime_registry = match runtime_registry_builder.build().await {
+        Ok(registry) => registry,
+        Err(error) => {
+            tracing::error!("failed to create runtime registry for join: {}", error);
+            std::process::exit(1);
+        }
+    };
 
     if let Err(error) = run_server(runtime_cfg, runtime_registry).await {
         tracing::error!("Server error: {}", error);
@@ -583,7 +654,7 @@ async fn main() {
         } => {
             tracing::info!("Starting Rimio server with config: {}", config);
 
-            let mut cfg = match Config::from_file(&config) {
+            let cfg = match Config::from_file(&config) {
                 Ok(c) => c,
                 Err(error) => {
                     tracing::error!("Failed to load config: {}", error);
@@ -592,20 +663,20 @@ async fn main() {
             };
 
             if let Some(override_node) = current_node {
-                tracing::info!(
-                    "Overriding current_node from '{}' to '{}' via CLI",
-                    cfg.current_node,
-                    override_node
-                );
-                cfg.current_node = override_node;
+                tracing::info!("Using node override '{}' via CLI", override_node);
+                run_with_config(cfg, &override_node, init).await;
+                return;
             }
 
-            run_with_config(cfg, init).await;
+            tracing::error!(
+                "legacy `server` command now requires --current-node; please use `rimio start --conf ... --node ...`"
+            );
+            std::process::exit(2);
         }
         Commands::Start { conf, node, init } => {
             tracing::info!("Starting Rimio with start command, config: {}", conf);
 
-            let mut cfg = match Config::from_file(&conf) {
+            let cfg = match Config::from_file(&conf) {
                 Ok(c) => c,
                 Err(error) => {
                     tracing::error!("Failed to load config: {}", error);
@@ -613,8 +684,7 @@ async fn main() {
                 }
             };
 
-            cfg.current_node = node;
-            run_with_config(cfg, init).await;
+            run_with_config(cfg, &node, init).await;
         }
         Commands::Join {
             registry_url,

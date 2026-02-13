@@ -74,10 +74,23 @@ def wait_for_health(port: int, timeout_seconds: float = 20.0) -> None:
     raise AssertionError(f"server did not become healthy on port {port}")
 
 
-def start_server(binary: Path, config_path: Path, log_path: Path, environment: dict[str, str]) -> subprocess.Popen:
+def start_server(
+    binary: Path,
+    config_path: Path,
+    node_id: str,
+    log_path: Path,
+    environment: dict[str, str],
+) -> subprocess.Popen:
     log_handle = open(log_path, "ab")
     process = subprocess.Popen(
-        [str(binary), "server", "--config", str(config_path)],
+        [
+            str(binary),
+            "start",
+            "--conf",
+            str(config_path),
+            "--node",
+            node_id,
+        ],
         cwd=REPO_ROOT,
         stdout=log_handle,
         stderr=subprocess.STDOUT,
@@ -102,7 +115,6 @@ def stop_server(process: subprocess.Popen) -> None:
 
 def render_config(
     *,
-    current_node: str,
     node1_id: str,
     node1_port: int,
     node1_disk: Path,
@@ -116,7 +128,6 @@ def render_config(
     return (
         "\n".join(
             [
-                f'current_node: "{current_node}"',
                 "registry:",
                 "  backend: redis",
                 f'  namespace: "{namespace}"',
@@ -203,7 +214,6 @@ def main() -> None:
     # Node-1 uses 2048 slots and should win bootstrap.
     node1_config.write_text(
         render_config(
-            current_node=node1_id,
             node1_id=node1_id,
             node1_port=node1_port,
             node1_disk=node1_disk,
@@ -220,7 +230,6 @@ def main() -> None:
     # Node-2 local file is intentionally conflicting (64 slots). First-wins should ignore this.
     node2_config.write_text(
         render_config(
-            current_node=node2_id,
             node1_id=node1_id,
             node1_port=node1_port,
             node1_disk=node1_disk,
@@ -239,7 +248,7 @@ def main() -> None:
 
     try:
         # 1) Auto-init on normal startup when node is not initialized yet.
-        node1_server = start_server(binary, node1_config, node1_log, environment)
+        node1_server = start_server(binary, node1_config, node1_id, node1_log, environment)
         try:
             wait_for_health(node1_port)
         finally:
@@ -252,7 +261,15 @@ def main() -> None:
         # 2) Explicit --init should still work and exit quickly.
         with open(node2_log, "ab") as log_handle:
             init_result = subprocess.run(
-                [str(binary), "server", "--config", str(node2_config), "--init"],
+                [
+                    str(binary),
+                    "start",
+                    "--conf",
+                    str(node2_config),
+                    "--node",
+                    node2_id,
+                    "--init",
+                ],
                 cwd=REPO_ROOT,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
@@ -271,7 +288,7 @@ def main() -> None:
 
         # 3) First-wins bootstrap from registry: node-2 must use winner's 2048 slot config,
         #    not its local conflicting 64-slot file.
-        node2_server = start_server(binary, node2_config, node2_log, environment)
+        node2_server = start_server(binary, node2_config, node2_id, node2_log, environment)
         try:
             wait_for_health(node2_port)
 
@@ -317,7 +334,6 @@ def main() -> None:
         node2_config.write_text(
             "\n".join(
                 [
-                    f'current_node: "{node2_id}"',
                     "registry:",
                     "  backend: redis",
                     f'  namespace: "it-009-{run_id}"',
@@ -340,7 +356,13 @@ def main() -> None:
             encoding="utf-8",
         )
 
-        node2_server_after_mutation = start_server(binary, node2_config, node2_log, environment)
+        node2_server_after_mutation = start_server(
+            binary,
+            node2_config,
+            node2_id,
+            node2_log,
+            environment,
+        )
         try:
             wait_for_health(node2_port)
         finally:

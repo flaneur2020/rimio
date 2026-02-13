@@ -1,6 +1,10 @@
 use crate::error::{Result, RimError};
 use crate::node::{NodeInfo, NodeStatus};
 use crate::registry::Registry;
+use crate::registry::gossip_internal_transport::{
+    GossipInternalHttpTransport, GossipInternalTransportIngress, GossipInternalTransportOptions,
+    clear_global_ingress, install_global_ingress, new_transport_channels,
+};
 use crate::slot_manager::{ReplicaStatus, SlotHealth, SlotInfo};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -15,8 +19,23 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tokio::sync::RwLock;
+
+static LOCAL_REGISTRY_STORES: OnceLock<StdMutex<HashMap<String, Arc<RwLock<RegistryStore>>>>> =
+    OnceLock::new();
+
+fn shared_store_for_namespace(namespace: &str) -> Arc<RwLock<RegistryStore>> {
+    let stores = LOCAL_REGISTRY_STORES.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut guard = stores
+        .lock()
+        .expect("gossip local registry stores mutex poisoned");
+
+    guard
+        .entry(namespace.to_string())
+        .or_insert_with(|| Arc::new(RwLock::new(RegistryStore::default())))
+        .clone()
+}
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 struct RegistryStore {
@@ -222,6 +241,14 @@ fn parse_socket_addr(value: &str, field: &str) -> Result<SocketAddr> {
         .map_err(|error| RimError::Config(format!("invalid {} '{}': {}", field, value, error)))
 }
 
+fn parse_transport_name(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("memberlist_net")
+        .to_ascii_lowercase()
+}
+
 fn state_to_node_status(state: State) -> NodeStatus {
     match state {
         State::Alive => NodeStatus::Healthy,
@@ -247,9 +274,71 @@ type MemberlistType = Memberlist<
     >,
 >;
 
+type InternalMemberlistType = Memberlist<
+    GossipInternalHttpTransport,
+    CompositeDelegate<
+        SmolStr,
+        SocketAddr,
+        RegistryMemberlistDelegate,
+        memberlist::delegate::VoidDelegate<SmolStr, SocketAddr>,
+        RegistryMemberlistDelegate,
+        RegistryMemberlistDelegate,
+        RegistryMemberlistDelegate,
+    >,
+>;
+
+enum RegistryMemberlistHandle {
+    Net(MemberlistType),
+    Internal(InternalMemberlistType),
+}
+
+impl RegistryMemberlistHandle {
+    async fn join_many(
+        &self,
+        join_targets: impl Iterator<Item = Node<SmolStr, MaybeResolvedAddress<SocketAddr, SocketAddr>>>,
+    ) -> std::result::Result<
+        memberlist::proto::SmallVec<Node<SmolStr, SocketAddr>>,
+        (
+            memberlist::proto::SmallVec<Node<SmolStr, SocketAddr>>,
+            String,
+        ),
+    > {
+        match self {
+            Self::Net(memberlist) => memberlist
+                .join_many(join_targets)
+                .await
+                .map_err(|(joined, error)| (joined, error.to_string())),
+            Self::Internal(memberlist) => memberlist
+                .join_many(join_targets)
+                .await
+                .map_err(|(joined, error)| (joined, error.to_string())),
+        }
+    }
+
+    async fn members(&self) -> memberlist::proto::SmallVec<Arc<NodeState<SmolStr, SocketAddr>>> {
+        match self {
+            Self::Net(memberlist) => memberlist.members().await,
+            Self::Internal(memberlist) => memberlist.members().await,
+        }
+    }
+
+    async fn update_node(&self, timeout: std::time::Duration) -> std::result::Result<(), String> {
+        match self {
+            Self::Net(memberlist) => memberlist
+                .update_node(timeout)
+                .await
+                .map_err(|error| error.to_string()),
+            Self::Internal(memberlist) => memberlist
+                .update_node(timeout)
+                .await
+                .map_err(|error| error.to_string()),
+        }
+    }
+}
+
 pub struct GossipMemberlistRegistry {
     namespace: String,
-    memberlist: MemberlistType,
+    memberlist: RegistryMemberlistHandle,
     store: Arc<RwLock<RegistryStore>>,
     local_meta: Arc<RwLock<WireGossipMeta>>,
 }
@@ -261,6 +350,7 @@ impl GossipMemberlistRegistry {
         bind_addr: &str,
         advertise_addr: Option<&str>,
         seeds: Vec<String>,
+        transport: Option<&str>,
     ) -> Result<Self> {
         let namespace = namespace.trim().to_string();
         if namespace.is_empty() {
@@ -283,8 +373,10 @@ impl GossipMemberlistRegistry {
         };
 
         let local_node_id = SmolStr::new(node_id);
-        let local_advertise = advertise.unwrap_or(bind).to_string();
-        let store = Arc::new(RwLock::new(RegistryStore::default()));
+        let local_advertise_addr = advertise.unwrap_or(bind);
+        let local_advertise = local_advertise_addr.to_string();
+        let transport_name = parse_transport_name(transport);
+        let store = shared_store_for_namespace(&namespace);
         let local_meta = Arc::new(RwLock::new(WireGossipMeta {
             namespace: namespace.clone(),
             node_id: node_id.to_string(),
@@ -301,22 +393,59 @@ impl GossipMemberlistRegistry {
             .with_merge_delegate(delegate_core.clone())
             .with_node_delegate(delegate_core);
 
-        let mut transport_options = NetTransportOptions::<
-            SmolStr,
-            memberlist::tokio::TokioSocketAddrResolver,
-            Tcp<TokioRuntime>,
-        >::with_stream_layer_options(local_node_id, ());
+        let memberlist = if transport_name == "internal_http" {
+            let (packet_producer, packet_subscriber, stream_producer, stream_subscriber) =
+                new_transport_channels();
+            install_global_ingress(GossipInternalTransportIngress::new(
+                packet_producer,
+                stream_producer,
+                std::time::Duration::from_secs(5),
+            ));
 
-        transport_options.add_bind_address(bind);
-        if let Some(addr) = advertise {
-            transport_options = transport_options.with_advertise_address(addr);
-        }
+            let options = GossipInternalTransportOptions {
+                local_id: local_node_id,
+                bind_addr: bind,
+                advertise_addr: local_advertise_addr,
+                request_timeout: std::time::Duration::from_secs(5),
+                packet_subscriber,
+                stream_subscriber,
+            };
 
-        let memberlist = Memberlist::with_delegate(delegate, transport_options, Options::lan())
-            .await
-            .map_err(|error| {
-                RimError::Internal(format!("failed to start gossip registry: {}", error))
-            })?;
+            let memberlist = Memberlist::with_delegate(delegate, options, Options::lan())
+                .await
+                .map_err(|error| {
+                    clear_global_ingress();
+                    RimError::Internal(format!("failed to start gossip registry: {}", error))
+                })?;
+
+            RegistryMemberlistHandle::Internal(memberlist)
+        } else {
+            if transport_name != "memberlist_net" && transport_name != "net" {
+                return Err(RimError::Config(format!(
+                    "unsupported gossip transport '{}': expected memberlist_net|internal_http",
+                    transport_name
+                )));
+            }
+
+            let mut transport_options = NetTransportOptions::<
+                SmolStr,
+                memberlist::tokio::TokioSocketAddrResolver,
+                Tcp<TokioRuntime>,
+            >::with_stream_layer_options(local_node_id, ());
+
+            transport_options.add_bind_address(bind);
+            if let Some(addr) = advertise {
+                transport_options = transport_options.with_advertise_address(addr);
+            }
+
+            let memberlist = Memberlist::with_delegate(delegate, transport_options, Options::lan())
+                .await
+                .map_err(|error| {
+                    RimError::Internal(format!("failed to start gossip registry: {}", error))
+                })?;
+
+            RegistryMemberlistHandle::Net(memberlist)
+        };
 
         let parsed_seeds = seeds
             .into_iter()
@@ -402,6 +531,15 @@ impl GossipMemberlistRegistry {
         nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
         nodes.dedup_by(|left, right| left.node_id == right.node_id);
         Ok(nodes)
+    }
+
+    async fn ensure_joined_snapshot(&self) -> Result<()> {
+        self.memberlist
+            .update_node(std::time::Duration::from_secs(1))
+            .await
+            .map_err(|error| {
+                RimError::Internal(format!("memberlist update_node failed: {}", error))
+            })
     }
 }
 
@@ -498,6 +636,7 @@ impl Registry for GossipMemberlistRegistry {
     }
 
     async fn get_bootstrap_state(&self) -> Result<Option<Vec<u8>>> {
+        self.ensure_joined_snapshot().await?;
         let store = self.store.read().await;
         Ok(store.bootstrap_state.clone())
     }
@@ -509,6 +648,8 @@ impl Registry for GossipMemberlistRegistry {
         }
 
         store.bootstrap_state = Some(payload.to_vec());
+        drop(store);
+        self.ensure_joined_snapshot().await?;
         Ok(true)
     }
 }

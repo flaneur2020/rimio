@@ -9,8 +9,6 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default)]
-    pub current_node: String,
     pub registry: RegistryConfig,
     pub initial_cluster: InitialClusterConfig,
     pub archive: Option<ArchiveConfig>,
@@ -97,10 +95,6 @@ pub struct RedisConfig {
 pub struct GossipConfig {
     #[serde(default = "default_gossip_transport")]
     pub transport: String,
-    #[serde(default)]
-    pub bind_addr: Option<String>,
-    #[serde(default)]
-    pub advertise_addr: Option<String>,
     #[serde(default)]
     pub seeds: Vec<String>,
 }
@@ -199,9 +193,14 @@ impl Config {
         Ok(config)
     }
 
+    #[allow(dead_code)]
     pub fn to_init_cluster_request(&self) -> ClusterInitRequest {
+        self.to_init_cluster_request_for_node("")
+    }
+
+    pub fn to_init_cluster_request_for_node(&self, current_node: &str) -> ClusterInitRequest {
         ClusterInitRequest {
-            current_node: self.current_node.clone(),
+            current_node: current_node.to_string(),
             nodes: self
                 .initial_cluster
                 .nodes
@@ -254,7 +253,12 @@ impl Config {
         }
     }
 
+    #[allow(dead_code)]
     pub fn registry_builder(&self) -> RegistryBuilder {
+        self.registry_builder_for_node("")
+    }
+
+    pub fn registry_builder_for_node(&self, node_id: &str) -> RegistryBuilder {
         let builder = RegistryBuilder::new().namespace(self.registry.namespace_or_default());
 
         match self.registry.backend {
@@ -281,23 +285,33 @@ impl Config {
             RegistryBackend::Gossip => {
                 let gossip = self.registry.gossip.clone().unwrap_or(GossipConfig {
                     transport: default_gossip_transport(),
-                    bind_addr: None,
-                    advertise_addr: None,
                     seeds: Vec::new(),
                 });
 
                 let mut builder = builder
                     .backend("gossip")
                     .gossip_transport(gossip.transport)
-                    .gossip_node_id(self.current_node.clone())
+                    .gossip_node_id(node_id.to_string())
                     .gossip_seeds(gossip.seeds);
 
-                if let Some(bind_addr) = gossip.bind_addr {
-                    builder = builder.gossip_bind_addr(bind_addr);
-                }
+                if let Some(node) = self
+                    .initial_cluster
+                    .nodes
+                    .iter()
+                    .find(|node| node.node_id == node_id)
+                {
+                    if !node.bind_addr.trim().is_empty() {
+                        builder = builder.gossip_bind_addr(node.bind_addr.clone());
+                    }
 
-                if let Some(advertise_addr) = gossip.advertise_addr {
-                    builder = builder.gossip_advertise_addr(advertise_addr);
+                    if let Some(advertise_addr) = node
+                        .advertise_addr
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        builder = builder.gossip_advertise_addr(advertise_addr.to_string());
+                    }
                 }
 
                 builder
@@ -305,8 +319,17 @@ impl Config {
         }
     }
 
+    #[allow(dead_code)]
     pub fn runtime_from_bootstrap(&self, bootstrap: &BootstrapState) -> Result<RuntimeConfig> {
-        Self::runtime_from_bootstrap_for_node(bootstrap, &self.current_node, self.registry.clone())
+        let current_node = self
+            .initial_cluster
+            .nodes
+            .first()
+            .ok_or_else(|| RimError::Config("initial_cluster.nodes cannot be empty".to_string()))?
+            .node_id
+            .clone();
+
+        Self::runtime_from_bootstrap_for_node(bootstrap, &current_node, self.registry.clone())
     }
 
     pub fn runtime_from_bootstrap_for_node(

@@ -281,13 +281,11 @@ registry:
   backend: gossip # options: gossip | redis | etcd
   namespace: default
   gossip:
-    provider: memberlist
-    bind_addr: "0.0.0.0:7946"
-    advertise_addr: "127.0.0.1:7946"
+    transport: "internal_http"
     seeds:
-      - "127.0.0.1:7946"
-      - "127.0.0.1:7947"
-      - "127.0.0.1:7948"
+      - "192.19.0.1:482"
+      - "192.19.0.2:482"
+      - "192.19.0.3:482"
     gossip_interval_ms: 500
     full_sync_interval_sec: 10
     suspect_timeout_sec: 15

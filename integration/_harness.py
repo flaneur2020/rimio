@@ -252,10 +252,10 @@ class RimCluster:
             )
 
         for node in self.nodes:
-            config_content = self._render_config(current_node_id=node.node_id)
+            config_content = self._render_config()
             node.config_path.write_text(config_content, encoding="utf-8")
 
-    def _render_config(self, *, current_node_id: str) -> str:
+    def _render_config(self) -> str:
         cluster_nodes = "".join(
             (
                 f"    - node_id: \"{node.node_id}\"\n"
@@ -268,7 +268,6 @@ class RimCluster:
         )
 
         return (
-            f"current_node: \"{current_node_id}\"\n"
             f"registry:\n"
             f"  backend: redis\n"
             f"  namespace: \"{self.group_id}\"\n"
@@ -293,9 +292,11 @@ class RimCluster:
             result = subprocess.run(
                 [
                     str(self.binary_path),
-                    "server",
-                    "--config",
+                    "start",
+                    "--conf",
                     str(node.config_path),
+                    "--node",
+                    node.node_id,
                     "--init",
                 ],
                 cwd=REPO_ROOT,
@@ -418,7 +419,14 @@ class RimCluster:
         environment.setdefault("RUST_LOG", "rimio=info")
 
         node.process = subprocess.Popen(
-            [str(self.binary_path), "server", "--config", str(node.config_path)],
+            [
+                str(self.binary_path),
+                "start",
+                "--conf",
+                str(node.config_path),
+                "--node",
+                node.node_id,
+            ],
             cwd=REPO_ROOT,
             stdout=node.log_handle,
             stderr=subprocess.STDOUT,

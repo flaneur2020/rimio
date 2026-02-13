@@ -13,7 +13,7 @@ from pathlib import Path
 INTEGRATION_DIR = Path(__file__).resolve().parent
 
 
-RFC0008_PREFIXES = ("016_", "017_", "018_", "019_", "020_", "021_")
+RFC0008_PREFIXES = ("016_", "017_", "018_", "019_", "020_", "021_", "022_")
 
 
 def discover_cases(*, include_s3: bool, include_rfc0008: bool) -> list[Path]:

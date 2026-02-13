@@ -1,9 +1,9 @@
 use super::{
     HealHeadItem, HealHeadsRequest, HealHeadsResponse, HealRepairRequest, HealRepairResponse,
     HealSlotlet, HealSlotletsQuery, HealSlotletsResponse, InternalBootstrapResponse,
-    InternalGossipSeedsResponse, InternalHeadApplyRequest, InternalHeadApplyResponse,
-    InternalHeadResponse, InternalPartPutResponse, InternalPartQuery, InternalPathQuery,
-    ServerState, normalize_blob_path, response_error,
+    InternalGossipFromQuery, InternalGossipSeedsResponse, InternalHeadApplyRequest,
+    InternalHeadApplyResponse, InternalHeadResponse, InternalPartPutResponse, InternalPartQuery,
+    InternalPathQuery, ServerState, normalize_blob_path, response_error,
 };
 use axum::{
     Json,
@@ -17,6 +17,7 @@ use rimio_core::{
     InternalGetHeadOperationOutcome, InternalGetHeadOperationRequest,
     InternalGetPartOperationOutcome, InternalGetPartOperationRequest,
     InternalPutHeadOperationRequest, InternalPutPartOperationRequest, RimError,
+    ingest_global_gossip_packet, ingest_global_gossip_stream,
 };
 use std::sync::Arc;
 
@@ -345,6 +346,7 @@ pub(crate) async fn v1_internal_cluster_bootstrap(
             StatusCode::OK,
             Json(InternalBootstrapResponse {
                 found: false,
+                namespace: state.config.registry.namespace_or_default().to_string(),
                 state: None,
             }),
         )
@@ -365,6 +367,7 @@ pub(crate) async fn v1_internal_cluster_bootstrap(
         StatusCode::OK,
         Json(InternalBootstrapResponse {
             found: true,
+            namespace: state.config.registry.namespace_or_default().to_string(),
             state: Some(bootstrap_state),
         }),
     )
@@ -388,4 +391,59 @@ pub(crate) async fn v1_internal_cluster_gossip_seeds(
     seeds.dedup();
 
     (StatusCode::OK, Json(InternalGossipSeedsResponse { seeds })).into_response()
+}
+
+fn parse_from_socket_addr(raw: &str) -> std::result::Result<std::net::SocketAddr, String> {
+    raw.trim().parse::<std::net::SocketAddr>().map_err(|error| {
+        format!(
+            "invalid gossip sender '{}': expected host:port ({})",
+            raw, error
+        )
+    })
+}
+
+pub(crate) async fn v1_internal_gossip_packet(
+    Query(query): Query<InternalGossipFromQuery>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let Some(from_raw) = query.from.as_deref() else {
+        return response_error(StatusCode::BAD_REQUEST, "from query is required");
+    };
+
+    let from = match parse_from_socket_addr(from_raw) {
+        Ok(addr) => addr,
+        Err(message) => return response_error(StatusCode::BAD_REQUEST, message),
+    };
+
+    match ingest_global_gossip_packet(from, &body).await {
+        Ok(true) => StatusCode::OK.into_response(),
+        Ok(false) => response_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "gossip transport not initialized",
+        ),
+        Err(error) => response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
+pub(crate) async fn v1_internal_gossip_stream(
+    Query(query): Query<InternalGossipFromQuery>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let Some(from_raw) = query.from.as_deref() else {
+        return response_error(StatusCode::BAD_REQUEST, "from query is required");
+    };
+
+    let from = match parse_from_socket_addr(from_raw) {
+        Ok(addr) => addr,
+        Err(message) => return response_error(StatusCode::BAD_REQUEST, message),
+    };
+
+    match ingest_global_gossip_stream(from, &body).await {
+        Ok(Some(response)) => (StatusCode::OK, response).into_response(),
+        Ok(None) => response_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "gossip transport not initialized",
+        ),
+        Err(error) => response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
 }

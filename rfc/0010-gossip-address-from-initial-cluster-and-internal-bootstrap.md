@@ -225,10 +225,10 @@ initial_cluster:
 
 ### P1：配置与兼容
 
-- [ ] 裁剪 `registry.gossip.bind_addr/advertise_addr`（配置可不再出现）
-- [ ] 保留兼容窗口：若旧字段存在，打印 warning 并忽略
-- [ ] 更新 `config.example.yaml` 与 `README` 单端口示例
-- [ ] 校验 `initial_cluster.nodes[*].bind_addr/advertise_addr` 完整性
+- [x] 裁剪 `registry.gossip.bind_addr/advertise_addr`（配置可不再出现）
+- [x] 取消兼容窗口（直接移除旧字段）
+- [x] 更新 `README` 单端口示例
+- [x] 从 `initial_cluster.nodes[*].bind_addr/advertise_addr` 注入 gossip 地址
 
 ### P1：测试清单
 

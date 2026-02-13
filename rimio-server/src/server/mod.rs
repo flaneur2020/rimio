@@ -10,7 +10,8 @@ use rimio_core::{
     HealRepairOperation, HealSlotletsOperation, InternalGetHeadOperation, InternalGetPartOperation,
     InternalPutHeadOperation, InternalPutPartOperation, ListBlobsOperation, Node, NodeInfo,
     PartStore, PutBlobArchiveWriter, PutBlobOperation, ReadBlobOperation, RedisArchiveStore,
-    Registry, Result, RimError, S3ArchiveStore, set_default_s3_archive_store,
+    Registry, Result, RimError, S3ArchiveStore, clear_global_gossip_ingress,
+    set_default_s3_archive_store,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,8 +30,9 @@ use external::{
 };
 use internal::{
     internal_get_head, internal_get_part, internal_put_head, internal_put_part,
-    v1_internal_cluster_bootstrap, v1_internal_cluster_gossip_seeds, v1_internal_heal_heads,
-    v1_internal_heal_repair, v1_internal_heal_slotlets,
+    v1_internal_cluster_bootstrap, v1_internal_cluster_gossip_seeds, v1_internal_gossip_packet,
+    v1_internal_gossip_stream, v1_internal_heal_heads, v1_internal_heal_repair,
+    v1_internal_heal_slotlets,
 };
 pub(crate) use types::*;
 
@@ -203,15 +205,27 @@ pub async fn run_server(config: RuntimeConfig, registry: Arc<dyn Registry>) -> R
             "/internal/v1/cluster/gossip-seeds",
             get(v1_internal_cluster_gossip_seeds),
         )
+        .route(
+            "/internal/v1/gossip/packet",
+            post(v1_internal_gossip_packet),
+        )
+        .route(
+            "/internal/v1/gossip/stream",
+            post(v1_internal_gossip_stream),
+        )
         .merge(rimio_s3_gateway::router::<ServerState>())
         .with_state(state);
 
     let listener = TcpListener::bind(&node_cfg.bind_addr).await?;
     tracing::info!("Rimio listening on {}", node_cfg.bind_addr);
 
-    axum::serve(listener, app)
+    let serve_result = axum::serve(listener, app)
         .await
-        .map_err(|error| RimError::Http(error.to_string()))?;
+        .map_err(|error| RimError::Http(error.to_string()));
+
+    clear_global_gossip_ingress();
+
+    serve_result?;
 
     Ok(())
 }

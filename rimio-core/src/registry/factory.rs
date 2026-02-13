@@ -138,14 +138,10 @@ impl RegistryBuilder {
                     .trim()
                     .to_ascii_lowercase();
 
-                if transport == "internal_http" {
-                    return Err(RimError::Config(
-                        "gossip transport 'internal_http' is planned but not implemented yet"
-                            .to_string(),
-                    ));
-                }
-
-                if transport != "memberlist_net" && transport != "net" {
+                if transport != "memberlist_net"
+                    && transport != "net"
+                    && transport != "internal_http"
+                {
                     return Err(RimError::Config(format!(
                         "unsupported gossip transport '{}': expected memberlist_net|internal_http",
                         transport
@@ -155,8 +151,7 @@ impl RegistryBuilder {
                 let bind_addr = self.gossip_bind_addr.as_deref().unwrap_or_default().trim();
                 if bind_addr.is_empty() {
                     return Err(RimError::Config(
-                        "gossip bind_addr is required for gossip backend when transport=memberlist_net"
-                            .to_string(),
+                        "gossip bind_addr is required for gossip backend".to_string(),
                     ));
                 }
 
@@ -189,6 +184,7 @@ impl RegistryBuilder {
                     bind_addr,
                     advertise_addr.as_deref(),
                     seeds,
+                    Some(transport.as_str()),
                 )
                 .await?;
                 Ok(Arc::new(registry))

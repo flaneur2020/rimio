@@ -214,7 +214,6 @@ def main() -> None:
     config_path.write_text(
         "\n".join(
             [
-                f'current_node: "{node_id}"',
                 "registry:",
                 "  backend: redis",
                 f'  namespace: "{group_namespace}"',
@@ -252,7 +251,15 @@ def main() -> None:
     try:
         with open(log_path, "ab") as handle:
             init_result = subprocess.run(
-                [str(binary), "server", "--config", str(config_path), "--init"],
+                [
+                    str(binary),
+                    "start",
+                    "--conf",
+                    str(config_path),
+                    "--node",
+                    node_id,
+                    "--init",
+                ],
                 cwd=REPO_ROOT,
                 stdout=handle,
                 stderr=subprocess.STDOUT,
@@ -264,7 +271,14 @@ def main() -> None:
 
         log_handle = open(log_path, "ab")
         server_process = subprocess.Popen(
-            [str(binary), "server", "--config", str(config_path)],
+            [
+                str(binary),
+                "start",
+                "--conf",
+                str(config_path),
+                "--node",
+                node_id,
+            ],
             cwd=REPO_ROOT,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
