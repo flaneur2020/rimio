@@ -30,9 +30,10 @@ use external::{
 };
 use internal::{
     internal_get_head, internal_get_part, internal_put_head, internal_put_part,
-    v1_internal_cluster_bootstrap, v1_internal_cluster_gossip_seeds, v1_internal_gossip_packet,
-    v1_internal_gossip_stream, v1_internal_heal_heads, v1_internal_heal_repair,
-    v1_internal_heal_slotlets,
+    v1_internal_cluster_bootstrap, v1_internal_cluster_gossip_seeds, v1_internal_heal_heads,
+    v1_internal_heal_repair, v1_internal_heal_slotlets, v1_internal_meta_add_learner,
+    v1_internal_meta_raft_append, v1_internal_meta_raft_snapshot, v1_internal_meta_raft_vote,
+    v1_internal_meta_write,
 };
 pub(crate) use types::*;
 
@@ -206,13 +207,22 @@ pub async fn run_server(config: RuntimeConfig, registry: Arc<dyn Registry>) -> R
             get(v1_internal_cluster_gossip_seeds),
         )
         .route(
-            "/internal/v1/gossip/packet",
-            post(v1_internal_gossip_packet),
+            "/internal/v1/meta/raft-vote",
+            post(v1_internal_meta_raft_vote),
         )
         .route(
-            "/internal/v1/gossip/stream",
-            post(v1_internal_gossip_stream),
+            "/internal/v1/meta/raft-append",
+            post(v1_internal_meta_raft_append),
         )
+        .route(
+            "/internal/v1/meta/raft-snapshot",
+            post(v1_internal_meta_raft_snapshot),
+        )
+        .route(
+            "/internal/v1/meta/add-learner",
+            post(v1_internal_meta_add_learner),
+        )
+        .route("/internal/v1/meta/write", post(v1_internal_meta_write))
         .merge(rimio_s3_gateway::router::<ServerState>())
         .with_state(state);
 

@@ -100,7 +100,7 @@ pub struct GossipConfig {
 }
 
 fn default_gossip_transport() -> String {
-    "memberlist_net".to_string()
+    "internal_http".to_string()
 }
 
 fn default_redis_pool_size() -> usize {

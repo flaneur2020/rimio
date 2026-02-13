@@ -198,12 +198,6 @@ pub(crate) struct InternalGossipSeedsResponse {
     pub(crate) seeds: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct InternalGossipFromQuery {
-    #[serde(default)]
-    pub(crate) from: Option<String>,
-}
-
 fn default_limit() -> usize {
     100
 }

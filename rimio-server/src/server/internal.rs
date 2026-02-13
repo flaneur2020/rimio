@@ -1,9 +1,9 @@
 use super::{
     HealHeadItem, HealHeadsRequest, HealHeadsResponse, HealRepairRequest, HealRepairResponse,
     HealSlotlet, HealSlotletsQuery, HealSlotletsResponse, InternalBootstrapResponse,
-    InternalGossipFromQuery, InternalGossipSeedsResponse, InternalHeadApplyRequest,
-    InternalHeadApplyResponse, InternalHeadResponse, InternalPartPutResponse, InternalPartQuery,
-    InternalPathQuery, ServerState, normalize_blob_path, response_error,
+    InternalGossipSeedsResponse, InternalHeadApplyRequest, InternalHeadApplyResponse,
+    InternalHeadResponse, InternalPartPutResponse, InternalPartQuery, InternalPathQuery,
+    ServerState, normalize_blob_path, response_error,
 };
 use axum::{
     Json,
@@ -16,8 +16,10 @@ use rimio_core::{
     HeadKind, HealHeadsOperationRequest, HealRepairOperationRequest, HealSlotletsOperationRequest,
     InternalGetHeadOperationOutcome, InternalGetHeadOperationRequest,
     InternalGetPartOperationOutcome, InternalGetPartOperationRequest,
-    InternalPutHeadOperationRequest, InternalPutPartOperationRequest, RimError,
-    ingest_global_gossip_packet, ingest_global_gossip_stream,
+    InternalPutHeadOperationRequest, InternalPutPartOperationRequest, MetaAddLearnerRequest,
+    MetaAppendEntriesRequest, MetaInstallSnapshotRequest, MetaVoteRequest, MetaWriteRequest,
+    RimError, handle_global_add_learner, handle_global_append_entries, handle_global_client_write,
+    handle_global_install_snapshot, handle_global_vote,
 };
 use std::sync::Arc;
 
@@ -393,57 +395,47 @@ pub(crate) async fn v1_internal_cluster_gossip_seeds(
     (StatusCode::OK, Json(InternalGossipSeedsResponse { seeds })).into_response()
 }
 
-fn parse_from_socket_addr(raw: &str) -> std::result::Result<std::net::SocketAddr, String> {
-    raw.trim().parse::<std::net::SocketAddr>().map_err(|error| {
-        format!(
-            "invalid gossip sender '{}': expected host:port ({})",
-            raw, error
-        )
-    })
-}
-
-pub(crate) async fn v1_internal_gossip_packet(
-    Query(query): Query<InternalGossipFromQuery>,
-    body: Bytes,
+pub(crate) async fn v1_internal_meta_raft_vote(
+    Json(request): Json<MetaVoteRequest>,
 ) -> impl IntoResponse {
-    let Some(from_raw) = query.from.as_deref() else {
-        return response_error(StatusCode::BAD_REQUEST, "from query is required");
-    };
-
-    let from = match parse_from_socket_addr(from_raw) {
-        Ok(addr) => addr,
-        Err(message) => return response_error(StatusCode::BAD_REQUEST, message),
-    };
-
-    match ingest_global_gossip_packet(from, &body).await {
-        Ok(true) => StatusCode::OK.into_response(),
-        Ok(false) => response_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "gossip transport not initialized",
-        ),
-        Err(error) => response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    match handle_global_vote(request).await {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(error) => response_error(StatusCode::SERVICE_UNAVAILABLE, error.to_string()),
     }
 }
 
-pub(crate) async fn v1_internal_gossip_stream(
-    Query(query): Query<InternalGossipFromQuery>,
-    body: Bytes,
+pub(crate) async fn v1_internal_meta_raft_append(
+    Json(request): Json<MetaAppendEntriesRequest>,
 ) -> impl IntoResponse {
-    let Some(from_raw) = query.from.as_deref() else {
-        return response_error(StatusCode::BAD_REQUEST, "from query is required");
-    };
+    match handle_global_append_entries(request).await {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(error) => response_error(StatusCode::SERVICE_UNAVAILABLE, error.to_string()),
+    }
+}
 
-    let from = match parse_from_socket_addr(from_raw) {
-        Ok(addr) => addr,
-        Err(message) => return response_error(StatusCode::BAD_REQUEST, message),
-    };
+pub(crate) async fn v1_internal_meta_raft_snapshot(
+    Json(request): Json<MetaInstallSnapshotRequest>,
+) -> impl IntoResponse {
+    match handle_global_install_snapshot(request).await {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(error) => response_error(StatusCode::SERVICE_UNAVAILABLE, error.to_string()),
+    }
+}
 
-    match ingest_global_gossip_stream(from, &body).await {
-        Ok(Some(response)) => (StatusCode::OK, response).into_response(),
-        Ok(None) => response_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "gossip transport not initialized",
-        ),
-        Err(error) => response_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+pub(crate) async fn v1_internal_meta_add_learner(
+    Json(request): Json<MetaAddLearnerRequest>,
+) -> impl IntoResponse {
+    match handle_global_add_learner(request).await {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(error) => response_error(StatusCode::SERVICE_UNAVAILABLE, error.to_string()),
+    }
+}
+
+pub(crate) async fn v1_internal_meta_write(
+    Json(request): Json<MetaWriteRequest>,
+) -> impl IntoResponse {
+    match handle_global_client_write(request).await {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(error) => response_error(StatusCode::SERVICE_UNAVAILABLE, error.to_string()),
     }
 }

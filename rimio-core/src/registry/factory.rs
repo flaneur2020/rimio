@@ -134,16 +134,16 @@ impl RegistryBuilder {
                 let transport = self
                     .gossip_transport
                     .as_deref()
-                    .unwrap_or("memberlist_net")
+                    .unwrap_or("internal_http")
                     .trim()
                     .to_ascii_lowercase();
 
-                if transport != "memberlist_net"
-                    && transport != "net"
-                    && transport != "internal_http"
+                if transport != "internal_http"
+                    && transport != "openraft_http"
+                    && transport != "openraft"
                 {
                     return Err(RimError::Config(format!(
-                        "unsupported gossip transport '{}': expected memberlist_net|internal_http",
+                        "unsupported gossip transport '{}': expected internal_http",
                         transport
                     )));
                 }
