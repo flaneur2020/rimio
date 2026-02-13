@@ -44,6 +44,8 @@ Distributed write coordination and node lifecycle management.
 - [x] Implement memberlist custom internal transport (`Transport`)
 - [x] Wire gossip startup sequence to single-port flow
 - [x] Remove user-facing `registry.gossip.bind_addr/advertise_addr`
+- [x] Extract `rimio-meta` crate for gossip+CRDT MetaKv runtime
+- [x] Decouple registry gossip path from direct memberlist internals
 
 ### 📋 Phase 3: Anti-Entropy
 

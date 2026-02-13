@@ -13,13 +13,13 @@ pub use error::{Result, RimError};
 pub use node::{Node, NodeInfo, NodeStatus};
 pub use operations::*;
 pub use registry::etcd::EtcdRegistry;
-pub use registry::gossip_internal_transport::{
+pub use registry::redis::RedisRegistry;
+pub use registry::{DynRegistry, Registry, RegistryBuilder, SlotEvent};
+pub use rimio_meta::{
     clear_global_ingress as clear_global_gossip_ingress,
     ingest_global_packet as ingest_global_gossip_packet,
     ingest_global_stream as ingest_global_gossip_stream,
 };
-pub use registry::redis::RedisRegistry;
-pub use registry::{DynRegistry, Registry, RegistryBuilder, SlotEvent};
 pub use slot_manager::{
     PART_SIZE, ReplicaStatus, Slot, SlotHealth, SlotInfo, SlotManager, TOTAL_SLOTS, slot_for_key,
 };
