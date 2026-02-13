@@ -25,7 +25,6 @@ impl ClusterManager {
         if let Some(existing) = bootstrap_store.get_bootstrap_state().await? {
             let state = decode_cluster_state(&existing)?;
             ensure_local_layout(&request.current_node, &state)?;
-            ensure_slot_assignments(&bootstrap_store, &state).await?;
             return Ok(ClusterInitResult {
                 bootstrap_state: state,
                 won_bootstrap_race: false,
@@ -60,9 +59,9 @@ impl ClusterManager {
 
         let state = decode_cluster_state(&active_bytes)?;
         ensure_local_layout(&request.current_node, &state)?;
-        ensure_slot_assignments(&bootstrap_store, &state).await?;
 
         if won_bootstrap_race {
+            ensure_slot_assignments(&bootstrap_store, &state).await?;
             run_optional_init_scan(&request.current_node, &request.init_scan, &state).await?;
         }
 

@@ -5,10 +5,11 @@ use crate::slot_manager::{ReplicaStatus, SlotHealth, SlotInfo};
 use async_trait::async_trait;
 use redis::{AsyncCommands, Client};
 use std::collections::HashMap;
+use tokio::sync::Mutex;
 
 /// Redis-based registry implementation
 pub struct RedisRegistry {
-    client: Client,
+    conn: Mutex<redis::aio::MultiplexedConnection>,
     prefix: String,
 }
 
@@ -18,7 +19,6 @@ impl RedisRegistry {
         let client = Client::open(url)
             .map_err(|e| RimError::Config(format!("Failed to connect to Redis: {}", e)))?;
 
-        // Test connection
         let mut conn = client
             .get_multiplexed_async_connection()
             .await
@@ -32,7 +32,10 @@ impl RedisRegistry {
 
         let prefix = format!("rimio:{}", group_id);
 
-        Ok(Self { client, prefix })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            prefix,
+        })
     }
 
     fn slot_key(&self, slot_id: u16) -> String {
@@ -63,16 +66,8 @@ impl RedisRegistry {
         format!("{}:bootstrap:state", self.prefix)
     }
 
-    /// Get a connection from the pool
-    async fn get_conn(&self) -> Result<redis::aio::MultiplexedConnection> {
-        self.client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|e| RimError::Internal(format!("Redis connection error: {}", e)))
-    }
-
     pub async fn get_bootstrap_bytes(&self) -> Result<Option<Vec<u8>>> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.conn.lock().await;
         let key = self.bootstrap_key();
 
         conn.get(&key).await.map_err(|error| {
@@ -84,7 +79,7 @@ impl RedisRegistry {
     }
 
     pub async fn set_bootstrap_bytes_if_absent(&self, bytes: &[u8]) -> Result<bool> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.conn.lock().await;
         let key = self.bootstrap_key();
 
         conn.set_nx(&key, bytes).await.map_err(|error| {
@@ -96,7 +91,7 @@ impl RedisRegistry {
 #[async_trait]
 impl Registry for RedisRegistry {
     async fn register_node(&self, node: &NodeInfo) -> Result<()> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.conn.lock().await;
         let key = self.node_key(&node.node_id);
         let value = serde_json::to_vec(node)?;
 
@@ -110,7 +105,7 @@ impl Registry for RedisRegistry {
     }
 
     async fn get_slot(&self, slot_id: u16) -> Result<Option<SlotInfo>> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.conn.lock().await;
         let key = self.slot_key(slot_id);
 
         let value: Option<Vec<u8>> = conn
@@ -128,7 +123,7 @@ impl Registry for RedisRegistry {
     }
 
     async fn set_slot(&self, info: &SlotInfo) -> Result<()> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.conn.lock().await;
         let key = self.slot_key(info.slot_id);
         let value = serde_json::to_vec(info)?;
 
@@ -141,7 +136,7 @@ impl Registry for RedisRegistry {
     }
 
     async fn get_all_slots(&self) -> Result<HashMap<u16, SlotInfo>> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.conn.lock().await;
         let pattern = self.slots_pattern();
 
         let keys: Vec<String> = conn.keys(&pattern).await.map_err(|e| {
@@ -161,7 +156,7 @@ impl Registry for RedisRegistry {
     }
 
     async fn report_health(&self, health: &SlotHealth) -> Result<()> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.conn.lock().await;
         let key = self.health_key(health.slot_id, &health.node_id);
         let value = serde_json::to_vec(health)?;
 
@@ -175,7 +170,7 @@ impl Registry for RedisRegistry {
     }
 
     async fn get_slot_health(&self, slot_id: u16) -> Result<Vec<SlotHealth>> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.conn.lock().await;
         let pattern = self.health_pattern(slot_id);
 
         let keys: Vec<String> = conn.keys(&pattern).await.map_err(|e| {
@@ -224,7 +219,7 @@ impl Registry for RedisRegistry {
     }
 
     async fn get_nodes(&self) -> Result<Vec<NodeInfo>> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.conn.lock().await;
         let pattern = self.nodes_pattern();
 
         let keys: Vec<String> = conn.keys(&pattern).await.map_err(|e| {
