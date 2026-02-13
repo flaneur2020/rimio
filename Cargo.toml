@@ -1,5 +1,5 @@
 [workspace]
-members = ["rimio-core", "rimio-server", "rimio-s3-gateway"]
+members = ["rimio-core", "rimio-meta", "rimio-server", "rimio-s3-gateway"]
 resolver = "2"
 
 [workspace.package]

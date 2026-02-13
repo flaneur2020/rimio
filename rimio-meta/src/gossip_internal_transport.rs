@@ -1,4 +1,4 @@
-use crate::error::{Result, RimError};
+use crate::error::{MetaError, Result};
 use bytes::Bytes;
 use memberlist::agnostic::RuntimeLite;
 use memberlist::proto::{Payload, ProtoReader, ProtoWriter};
@@ -103,7 +103,7 @@ impl GossipInternalTransportIngress {
     pub async fn ingest_packet(&self, from: SocketAddr, payload: &[u8]) -> Result<()> {
         let packet = Packet::new(from, TokioRuntime::now(), Bytes::copy_from_slice(payload));
         self.packet_producer.send(packet).await.map_err(|error| {
-            RimError::Internal(format!(
+            MetaError::Internal(format!(
                 "failed to enqueue gossip packet for memberlist: {}",
                 error
             ))
@@ -119,7 +119,7 @@ impl GossipInternalTransportIngress {
             .send(from, conn)
             .await
             .map_err(|error| {
-                RimError::Internal(format!(
+                MetaError::Internal(format!(
                     "failed to enqueue gossip stream for memberlist: {}",
                     error
                 ))
@@ -128,7 +128,9 @@ impl GossipInternalTransportIngress {
         shared
             .wait_response(self.stream_timeout)
             .await
-            .map_err(|error| RimError::Internal(format!("gossip stream response error: {}", error)))
+            .map_err(|error| {
+                MetaError::Internal(format!("gossip stream response error: {}", error))
+            })
     }
 }
 
@@ -176,9 +178,9 @@ impl From<reqwest::Error> for GossipInternalTransportError {
     }
 }
 
-impl From<GossipInternalTransportError> for RimError {
+impl From<GossipInternalTransportError> for MetaError {
     fn from(value: GossipInternalTransportError) -> Self {
-        RimError::Internal(value.to_string())
+        MetaError::Internal(value.to_string())
     }
 }
 
