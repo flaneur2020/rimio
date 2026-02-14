@@ -18,6 +18,8 @@ It bridges the gap between local SSD performance and cloud reliability.
 +-------------------------------------------------------+       +------------------------+
 ```
 
+This project is currently in active development and is not yet stable. Expect breaking changes, bugs, and frequent updates. We do not recommend using this in a production environment yet. Feedback and bug reports are welcome!
+
 It features:
 
 - Simple setup and configuration.
